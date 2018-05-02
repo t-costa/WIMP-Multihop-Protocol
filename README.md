@@ -16,7 +16,7 @@ Multihop routing protocol based on Directed Diffusion for the WIMP project: Ardu
 ## Periodic check: Change parent
 ![Change](https://github.com/t-costa/WIMP/blob/master/checkChangeParent_chart.jpg)
 
-### Reference
+### References
 [ESP documentation](http://arduino-esp8266.readthedocs.io/en/latest/)
 
 [Library code and examples](https://github.com/esp8266/Arduino/tree/master/doc)
