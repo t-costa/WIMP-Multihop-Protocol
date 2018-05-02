@@ -20,3 +20,5 @@ Multihop routing protocol based on Directed Diffusion for the WIMP project: Ardu
 [ESP documentation](http://arduino-esp8266.readthedocs.io/en/latest/)
 
 [Library code and examples](https://github.com/esp8266/Arduino/tree/master/doc)
+
+[Flash firmware](https://h3ron.com/post/programmare-lesp8266-ovvero-arduino-con-il-wifi-a-meno-di-2/)
