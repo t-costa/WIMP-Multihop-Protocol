@@ -1,7 +1,7 @@
 # WIMP
-Multihop routing protocol based on Directed Diffusion: Arduino with an ESP8266 module will be the nodes and a Raspberry pi 3B will be the sink.
+Multihop routing protocol based on Directed Diffusion for the WIMP project: Arduinos with an ESP8266 module will be the nodes and a Raspberry pi 3B will be the sink.
 
-## Deploy of the network
+## Initialization of the network
 ![Hello](https://github.com/t-costa/WIMP/blob/master/deploy_chart.jpg)
 
 
@@ -15,3 +15,10 @@ Multihop routing protocol based on Directed Diffusion: Arduino with an ESP8266 m
 
 ## Periodic check: Change parent
 ![Change](https://github.com/t-costa/WIMP/blob/master/checkChangeParent_chart.jpg)
+
+### References
+[ESP documentation](http://arduino-esp8266.readthedocs.io/en/latest/)
+
+[Library code and examples](https://github.com/esp8266/Arduino/tree/master/doc)
+
+[Flash firmware](https://h3ron.com/post/programmare-lesp8266-ovvero-arduino-con-il-wifi-a-meno-di-2/)
