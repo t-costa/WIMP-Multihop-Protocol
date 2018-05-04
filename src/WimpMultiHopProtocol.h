@@ -5,19 +5,41 @@
 #include "ArduinoJson.h"
 
 #define PORT 4210
+#define MAX_CHILDREN 1
+#define MAX_NEIGHBOURS 10
+
+// enum management_type {
+//     hello,
+//     hello_risp,
+//     change_parent,
+//     leave_me,
+//     forward_parent,
+//     forward_children
+// } mng_type;
+
+struct node_info {
+    IPAddress ip;
+    uint16_t len_path;
+    //TODO: potrei dover aggiungere ultima volta in cui l'ho sentito e power signal
+};
 
 //maybe they could be an association ID-IP
-IPAddress my_ip;
-IPAddress parent;
-IPAddress children[4];
-IPAddress neighbours[10];
+node_info my_ip;
+node_info parent;
+node_info children[MAX_CHILDREN];
+node_info neighbours[MAX_NEIGHBOURS];   //dovrebbe essere ordinato per path_length e power signal!
 //maybe I need also the raspberry IP
 char buffer[10][256];  //keep list of incoming messages (circular)
 bool wait_for_ack = false;
 bool message_waiting = false;
+
 int8_t first_message = 0;
 int8_t last_message = 0;
+
 uint16_t path_length = (64 * 1024) - 1; //not sure of the -1... 
+
+int num_children = 0;
+
 WiFiUDP udp;
 StaticJsonBuffer<256> json_buffer;
 
@@ -28,9 +50,27 @@ namespace WIMP {
      * Actual send of the packet with udp
     */
     void udp_send(IPAddress ip_dest, int port_dest, char* data) {
+        //TODO: potrebbe servire un check disponibiltà o robe del genere di esp
         udp.beginPacket(ip_dest, port_dest);
         udp.write(data);
         udp.endPacket();
+    }
+
+    int search(IPAddress other, node_info list[], int length) {
+        bool found = false;
+        int i = 0;
+        while (i < length && !found) {
+            if (list[i].ip.operator==(other)) {
+                found = true;
+            } else {
+                i++;
+            }
+        }
+        if (found) {
+            return i;
+        } else {
+            return -1;
+        }
     }
 
     /**
@@ -88,6 +128,7 @@ namespace WIMP {
         //TODO: 256 is random for now...
         int len_packet = udp.read(data, 256);
         if (len_packet > 0 && len_packet < 256) {
+            //non so se serve...
             data[len_packet] = '\0';
         }
 
@@ -99,49 +140,207 @@ namespace WIMP {
             return -1;
         }
 
-        char* type = root["type"];
+        char* handle = root["handle"];
 
-        if (strcmp(type, "HELLO")) {
-            //hello packet
-            //add the possibly new neighbour to the list, answer with
-            //your info
-            IPAddress other;
-            int other_path;
-        
-            other.fromString(root["IP"].asString());
-            other_path = root["PATH"];
-            //TODO: use the info
-
-            hello(other);
+        if (strcmp(handle, "HELLO")) {
+            read_hello(root);
             return 0;   //no message for application
         }
 
-        if (strcmp(type, "CHANGE")) {
-
+        if (strcmp(handle, "HELLO_RISP")) {
+            read_hello_risp();
+            return 0;
         }
 
-        if (strcmp(type, "LEAVE")) {
-            
+        if (strcmp(handle, "CHANGE")) {
+            read_change(root);
+            return 0;
         }
 
-        if (strcmp(type, "FORWARD")) {
-            //nel campo IP avrà la lista da seguire
+        if (strcmp(handle, "LEAVE")) {
+            read_leave(root);
+            return 0;            
         }
 
-        //application packet
-        //it's a json and is not a management/forward one
-        
-        for (int i=0; i<len_packet; ++i) {
-            buffer[last_message][i] = data[i];
+        if (strcmp(handle, "FORWARD_CHILDREN")) {
+            return read_forward_children(len_packet, data, root);   
         }
-        last_message++;
-        last_message = (last_message % 10); //circular buffer
 
-        message_waiting = true;
+        if (strcmp(handle, "FORWARD_PARENT")) {
+            read_forward_parent(data);
+            return 0;
+        }
 
-        return len_packet;
+        //this should be an error
+        return -1;
     }
 
+    /**
+     * 
+    */
+    void read_hello(JsonObject& root) {
+        //hello packet
+        //add the possibly new neighbour to the list, answer with
+        //your info
+        IPAddress other;
+        int other_path;
+    
+        other.fromString(root["IP"].asString());
+        other_path = root["PATH"];
+
+        //search if the ip is known
+        //TODO: aggiungi le varie modifiche che farai a node_info
+        if (parent.ip.operator==(other)) {
+            //update path length
+            parent.len_path = other_path;
+        } else {
+            int i = search(other, children, MAX_CHILDREN);
+            if (i != -1) {
+                //update info
+                children[i].len_path = other_path;
+            } else {
+                i = search(other, neighbours, MAX_NEIGHBOURS);
+                if (i != -1) {
+                    neighbours[i].len_path = other_path;
+                    //should update also the power signal!
+                } else {
+                    //new neighbour, check signal power
+                    //and decide what to do
+
+                }
+            }
+        }
+        
+        //always answer
+        hello_risp(other);
+    }
+
+    /**
+     * 
+    */
+    void read_hello_risp() {
+        //TODO: check parent answer
+        //add timers for children
+        //update infro
+        //maybe change parent
+    }
+
+    /**
+     * 
+    */
+    int read_forward_children(int len_packet, char* data, JsonObject& root) {
+        //nel campo IP avrà la lista da seguire
+        JsonArray& ip_path = root["IP_PATH"];
+        if (ip_path.measureLength() == 0) {
+            //I am the dest
+            //read message and deliver
+            
+            for (int i=0; i<len_packet; ++i) {
+                buffer[last_message][i] = data[i];
+            }
+            last_message++;
+            last_message = (last_message % 10); //circular buffer
+
+            message_waiting = true;
+            return len_packet;
+        } else {
+            String next = ip_path[0];
+            if (next.equals("broadcast")) {
+                //TODO: send to all children, message doesn't change
+                //deliver data to application
+
+                return len_packet;
+            }
+            //forse viene modificato il file originale
+            //(grasso che cola se è così!)
+            ip_path.removeAt(0);
+            //TODO: forward
+            return 0;
+        }            
+
+    }
+
+    /**
+     * 
+    */
+    void read_forward_parent(char* data) {
+        //packet from sink to parent
+        //since this is the library for the esp,
+        //I will never be the destination...
+        udp_send(parent.ip, PORT, data);
+    }
+
+    /**
+     * 
+    */
+    void read_change(JsonObject& root) {
+        //I received a change, add the node to children
+        //if possible
+        if (num_children == MAX_CHILDREN) {
+            //TODO: send error, can't have more children
+        } else {
+            //add to children and send positive ack
+            IPAddress new_child, old_par;
+            new_child.fromString(root["IP_SOURCE"].asString());
+            old_par.fromString(root["IP_OLD_PARENT"].asString());
+
+        //TODO: se old parent è uguale al mio parent, 
+        //devo ricorsivamente chiamare old parent su un neighbour 
+        //perchè non risolverei niente!
+
+        children[num_children].ip = new_child;
+        children[num_children].len_path = path_length+1;
+        //TODO: send ack to children and change in the network to sink
+        num_children++; 
+        }
+    }
+
+    /**
+     * 
+    */
+    void read_leave(JsonObject& root) {
+        //my child is a piece of shit, I have to kill it
+        IPAddress ip;
+        ip.fromString(root["IP_SOURCE"].asString());
+        
+        int i = 0;
+        bool found = false;
+        while (i < num_children && !found) {
+            //non so se funziona così ==...
+            if (children[i].ip.operator==(ip)) {
+                found = true;
+            } else {
+                i++;
+            }
+        }
+
+        //ricompatta children
+        while (i < num_children-1) {
+            children[i] = children[i+1];
+            i++;
+        }
+        num_children--;
+
+        //se non lo trovo non cambia niente...
+        //TODO: informa sink e manda ack
+    }
+
+    /**
+     * 
+    */
+    void ack(IPAddress dest, int port) {
+        char msg[64];
+        JsonObject& ans = json_buffer.createObject();
+       
+        ans["handle"] = "ACK";
+        ans.printTo(msg);
+
+        udp_send(dest, PORT, msg);
+    }
+
+    /**
+     * 
+    */
     char* retrieve_packet() {
         if (message_waiting) {
             char* msg = buffer[first_message];
@@ -205,8 +404,8 @@ namespace WIMP {
         char msg[256];
         JsonObject& ans = json_buffer.createObject();
        
-        ans["TYPE"] = "HELLO";
-        ans["IP"] = my_ip.toString();
+        ans["handle"] = "HELLO";
+        ans["IP"] = my_ip.ip.toString();
         ans["PATH"] = path_length;
         ans.printTo(msg);
 
@@ -218,8 +417,16 @@ namespace WIMP {
      * IP, parent, number of children and path_length
      * probably it can just be the same as hello...
     */
-    void hello_risp() {
+    void hello_risp(IPAddress dest) {
+        char msg[256];
+        JsonObject& ans = json_buffer.createObject();
+       
+        ans["handle"] = "HELLO_RISP";
+        ans["IP"] = my_ip.toString();
+        ans["PATH"] = path_length;
+        ans.printTo(msg);
 
+        udp_send(dest, PORT, msg);
     }
 
     /**
