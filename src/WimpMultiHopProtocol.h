@@ -51,5 +51,4 @@ namespace WIMP {
      * Initializes the network
     */
     void initialize();
-
 };
