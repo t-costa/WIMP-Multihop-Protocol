@@ -1,12 +1,13 @@
 #include "Arduino.h"
 #include "ESP8266WiFi.h"
 #include "WiFiUdp.h"
-#include <cstring>
-#include <ctime>
 #include "ArduinoJson.h"
 #include "WimpMultiHopProtocol.h"
 
-//arduino.h potrebbe non servire almeno per ora
+#include <cstring>
+#include <ctime>
+#include <random>
+
 
 #define PORT 42100
 #define MAX_CHILDREN 1
@@ -17,34 +18,27 @@
 
 #define debug true
 
+//TODO: AGGIUNGI SSID E RSSI ALL'HELLO
+
 struct node_info {
     IPAddress ip;
     String ssid;
-    int32_t rssi;
-    uint8_t len_path;
-    uint8_t times_not_seen;
+    int32_t rssi{};
+    uint8_t len_path{};
+    uint8_t times_not_seen{};
 };
 
-#pragma region global_variables
 //maybe they could be an association ID-IP
+WiFiUDP udp;
 IPAddress my_ip;
 node_info parent;
 node_info children[MAX_CHILDREN];
 node_info neighbours[MAX_NEIGHBOURS];   //dovrebbe essere ordinato per path_length e power signal!
-//maybe I need also the raspberry IP
+
 char buffer[LEN_BUFFER][LEN_PACKET];  //keep list of incoming messages (circular)
-bool wait_for_ack = false, positive_ack = false;
-bool message_waiting = false;
-bool parent_answer = false;
+bool wait_for_ack = false, positive_ack = false, message_waiting = false, parent_answer = false;
+uint8_t first_message = 0, last_message = 0, path_length = MAX_PATH_LENGTH, num_children = 0, num_neighbours = 0;
 
-int8_t first_message = 0;
-int8_t last_message = 0;
-
-uint8_t path_length = MAX_PATH_LENGTH; 
-
-uint8_t num_children = 0, num_neighbours = 0;
-
-WiFiUDP udp;
 //const char* ssid = "WIMP_";
 //const char* password = "7settete7&IPA";
 
@@ -52,26 +46,26 @@ const char* ssid = "Mi";
 const char* password = "4e8b149679da";
 
 StaticJsonBuffer<LEN_PACKET> json_buffer;
-#pragma endregion
 
-/**
- * Actual send of the packet with udp
-*/
-#pragma region udp_send
-void udp_send(IPAddress ip_dest, int port_dest, char* data) {
+
+/// Actual send of the packet with udp
+/// \param ip_dest ip address of the destination
+/// \param port_dest port of the destination
+/// \param data message to be sent
+void udp_send(IPAddress const& ip_dest, uint16_t port_dest, char* data) {
     //TODO: potrebbe servire un check disponibiltà o robe del genere di esp
     udp.beginPacket(ip_dest, port_dest);
     udp.write(data);
     udp.endPacket();
 }
-#pragma endregion
 
-/**
- * Search a specific ip in the given list
- * returns the index of the element in the list, -1 if not present
-*/
-#pragma region search
-int search(IPAddress other, node_info list[], int length) {
+
+/// Search a specific ip in the given list
+/// \param other ip address the funtion has to search
+/// \param list structure in which the function has to search
+/// \param length length of the structure
+/// \return intex of the element in the list if found, -1 if not present
+int search(IPAddress const& other, node_info list[], int length) {
     bool found = false;
     int i = 0;
     while (i < length && !found) {
@@ -87,37 +81,23 @@ int search(IPAddress other, node_info list[], int length) {
         return -1;
     }
 }
-#pragma endregion
 
-/**
- * Reads a string until a \n or the end of file,
- * returns the line read
-*/
-#pragma region readline
-/*char* readline(char* message, int length, int* start) {
-    char res[64];
-    int i = 0;
-    
-    while (*start < length && res[*start] != '\n') {
-        res[i] = message[*start];
-        i++;
-        (*start)++;
-    }
 
-    return res;
-}*/
-#pragma endregion 
-
-#pragma region swap
-void swap(node_info* v, int i, int j) {
+/// Swaps values in positions i and j in v (assume 0 <= i,j < length of v)
+/// \param v list with the elements
+/// \param i index of the first element to be swapped
+/// \param j index of the second element to be swapped
+void swap(node_info v[], int i, int j) {
     node_info temp = v[i];
     v[i] = v[j];
     v[j] = temp;
 }
-#pragma endregion
 
-#pragma region shit_sort
-void shit_sort(node_info* v, int length) {
+
+/// A shitty implementation of a sorting algorithm
+/// \param v structure we have to sort
+/// \param length length of the structure
+void shit_sort(node_info v[], int length) {
     
     for (int i=0; i<length; ++i) {
         for (int j=i+1; j<length; ++j) {
@@ -135,17 +115,12 @@ void shit_sort(node_info* v, int length) {
         }
     }
 }
-#pragma endregion
 
-/**
- * Sends an ack to a node
- * TODO: need heavy refactoring!
- * unless it's just for management packet, in that case
- * it should not be in the library
- * flag indicates if it is a positive or negative ack
-*/
-#pragma region WIMP::ack
-void WIMP::ack(IPAddress dest, bool flag) {
+
+/// Sends an ack to a node
+/// \param dest ip address of the destination node
+/// \param flag type of the ack, if positive or negative
+void WIMP::ack(IPAddress const& dest, bool flag) {
     char msg[64];
     JsonObject& ans = json_buffer.createObject();
     
@@ -161,20 +136,15 @@ if (flag) {
 #endif
     udp_send(dest, PORT, msg);
 }
-#pragma endregion
 
-/**
- * Parse a received ack and sets global variables
-*/
-#pragma region read_ack
+
+/// Parse a received ack and sets global variables
+/// \param root json received
 void read_ack(JsonObject& root) {
+    //TODO: credo di poter fare anche direttamente con bool
     const char* result = root["type"];
 
-    if (strcmp(result, "true")) {
-        positive_ack = true;
-    } else {
-        positive_ack = false;
-    }
+    positive_ack = strcmp(result, "true") == 0;
 
 #if debug
     if (positive_ack) {
@@ -185,139 +155,157 @@ void read_ack(JsonObject& root) {
 #endif
     wait_for_ack = false;
 }
-#pragma endregion
 
-/**
- * Parse the received message of type hello
-*/
-#pragma region read_hello
+
+/// Parse the received message of type hello
+/// \param root json received
 void read_hello(JsonObject& root) {
-    //TODO: check parent answer
-    //add timers for children
-    //update infro
-    //maybe change parent
+
     IPAddress other;
     uint8_t other_path;
 	String s;
-    //other.fromString(root["ip"].asString());
+
 	root["ip"].printTo(s);
 	other.fromString(s);
     other_path = root["path"];
+
+#if debug
+Serial.printf("Reading hello risp: ip: %s - path: %d\n", other.toString().c_str(), other_path);
+Serial.printf("My parent: %s\n", parent.ip.toString().c_str());
+#endif
+
     if (parent.ip.operator==(other)) {
-        //update path length
+        //update path length of the parent
 #if debug
 Serial.printf("Read an hello from parent:\n");
 Serial.printf("IP: %s\n PATH: %d\n", other.toString().c_str(), other_path);
 #endif
         parent_answer = true;
-        parent.len_path = other_path+1;
+        other_path++;
+        parent.len_path = other_path;
         parent.times_not_seen = 0;
     } else {
         int i = search(other, children, MAX_CHILDREN);
         if (i != -1) {
-            //update info -> non sono sicuro serva...
+            //update info of child
 #if debug
 Serial.printf("Read an hello from children:\n");
 Serial.printf("IP: %s\n PATH: %d\n", other.toString().c_str(), other_path);
 #endif
-            children[i].len_path = (other_path < path_length+1) ? other_path : path_length+1;
+            //here i don't need the ++ on other_path
+            children[i].len_path = (uint8_t) ((other_path < path_length+1) ? other_path : path_length+1);
             children[i].times_not_seen = 0;
         } else {
             i = search(other, neighbours, MAX_NEIGHBOURS);
             if (i != -1) {
+                //known neighbour
 #if debug
 Serial.printf("Read an hello from neighbour (known):\n");
 Serial.printf("IP: %s\n PATH: %d\n", other.toString().c_str(), other_path);
 #endif
+                //no need for other_path++
                 neighbours[i].len_path = other_path;
                 neighbours[i].times_not_seen = 0;
-                //TODO: should update also the power signal!
             } else {
-                //new neighbour, maybe I still don't know anyone
-                Serial.println("New neighbourg");
+                //new neighbour
+#if debug
+Serial.printf("Read an hello from neighbour (unknown):\n");
+Serial.printf("IP: %s\n PATH: %d\nNum_neighbours: %d\n", other.toString().c_str(), other_path, num_neighbours);
+#endif
                 if (num_neighbours < MAX_NEIGHBOURS) {
-                    //add it
-                    //TODO: devo aggiungere ssid e rssi all'hello!
+                    //add the new neighbour it
+                    //FIXME: servono ssid e rssi
                     neighbours[num_neighbours] = node_info {other, "NULL", 0, other_path, 0};
                     num_neighbours++;
                 }
 #if debug
-Serial.printf("Read an hello from neighbour (unknown):\n");
-Serial.printf("IP: %s\n PATH: %d\nNum_neighbours: %d\n", other.toString().c_str(), other_path, num_neighbours);
+                else {
+                    Serial.println("Can't add the new neighbour! There are too many! :(");
+                }
 #endif
             }
         }
     }
 }
-#pragma endregion
 
-/**
- * Forwards the received packet to the specific child, or to the application
- * if I am the destination 
-*/
-#pragma region read_forward_children
-int read_forward_children(char* complete_packet, JsonObject& root) {
-    //nel campo IP avrà la lista da seguire
+
+/// Forwards the received packet to the specific child or to the application if I am the destination
+/// \param complete_packet data received
+/// \param root json object received
+/// \return 0 if I'm not the destination, the length of the packet otherwise
+size_t read_forward_children(char* complete_packet, JsonObject& root) {
+    //in the path field there will be the list of hop
     JsonArray& ip_path = root["path"];
+
+#if debug
+root.prettyPrintTo(Serial);
+#endif
+
     if (ip_path.measureLength() == 0) {
-        //I am the dest
+        //I am the destination
         //read message and deliver
         const char* data = root["data"];
-        int len_packet = root["data"].measureLength();  //TODO: check
+        //size_t len_packet = strlen(data); //forse questo è più affidabile...
+        size_t len_packet = root["data"].measureLength();  //TODO: check
 
         for (int i=0; i<len_packet; ++i) {
             buffer[last_message][i] = data[i];
         }
 
         last_message++;
-        last_message = (last_message % LEN_BUFFER); //circular buffer
+        last_message = (uint8_t) (last_message % LEN_BUFFER); //circular buffer
 
         message_waiting = true;
 #if debug
 Serial.printf("Read a forward children directed to me (my_ip: %s):\n", my_ip.toString().c_str());
 Serial.printf("DATA: %s\n", data);
 #endif
+
+        //TODO: dovrei mandare ack al parent?
         return len_packet;
     } else {
-        String next = ip_path[0];
+        String next = ip_path[0];   //first hop
+
         if (next.equals("broadcast")) {
-            //TODO: send to all children, message doesn't change
             //deliver data to application
             const char* data = root["data"];
-            int len_packet = root["data"].measureLength();  //TODO: check
+            size_t len_packet = root["data"].measureLength();  //TODO: check
 
             for (int i=0; i<len_packet; ++i) {
                 buffer[last_message][i] = data[i];
             }
             
             last_message++;
-            last_message = (last_message % LEN_BUFFER); //circular buffer
+            last_message = (uint8_t) (last_message % LEN_BUFFER); //circular buffer
 
             message_waiting = true;
 #if debug
 Serial.printf("Read a forward children broadcast (my_ip: %s):\n", my_ip.toString().c_str());
 Serial.printf("DATA: %s\n", data);
 #endif
+            //resend only to children (avoid loop in the network)
             for (int i=0; i<num_children; ++i) {
                 udp_send(children[i].ip, PORT, complete_packet);
             }
 
             return len_packet;
         }
+        //I'm just an intermediate node
         //remove my ip from the path and forward to the right child
         IPAddress next_hop;
-        next_hop.fromString((const char*) ip_path[0]);
+        next_hop.fromString((const char*) ip_path[0]);  //TODO: check
 
-        Serial.printf("Next hop: %s\n", next_hop.toString().c_str());
-
-        //ip_path.removeAt(0);// deprecato, dovrei usare remove
+        //remove the hop that I'm processing
         ip_path.remove(0);
+
+        //write the new json message
         char new_data[LEN_PACKET];
         root.printTo(new_data);
 
 #if debug
 Serial.printf("Read a forward children NOT directed to me (my_ip: %s):\n", my_ip.toString().c_str());
-Serial.printf("DATA: %s\n", new_data);
+Serial.printf("Next hop: %s\n", next_hop.toString().c_str());
+Serial.printf("DATA (forwarded): %s\n", new_data);
 #endif
         
         udp_send(next_hop, PORT, new_data);
@@ -325,12 +313,10 @@ Serial.printf("DATA: %s\n", new_data);
         return 0;
     }            
 }
-#pragma endregion
 
-/**
- * Forwards the received packet to my parent 
-*/
-#pragma region read_forward_parent
+
+/// Forwards the received packet to my parent
+/// \param data message to be forwarded
 void read_forward_parent(char* data) {
     //packet from sink to parent
     //since this is the library for the esp,
@@ -343,63 +329,70 @@ Serial.printf("Read a forward parent (my_ip: %s):\n", my_ip.toString().c_str());
 
     udp_send(parent.ip, PORT, data);
 }
-#pragma endregion
 
-/**
- * A node wants me as father
-*/
-#pragma region read_change
+
+/// Parse the received message of type change
+/// \param root json object received
 void read_change(JsonObject& root) {
-    //I received a change, add the node to children
-    //if possible
+    //I received a change, add the node to children if possible
     IPAddress new_child, old_par;
-    new_child.fromString(root["ip_source"].asString());//asString() deprecato
-    old_par.fromString(root["ip_old_parent"].asString());
-    
+    String n, o;
+    root["ip_source"].printTo(n);
+    root["ip_old_parent"].printTo(o);
+    new_child.fromString(n);
+    old_par.fromString(o);
+
+#if debug
+Serial.printf("Read a change parent (my_ip: %s):\n", my_ip.toString().c_str());
+Serial.printf("ip_source: %s - ip_old: %s\n", new_child.toString().c_str(), old_par.toString().c_str());
+#endif
+
     if (num_children == MAX_CHILDREN) {
         //send error, can't have more children
 #if debug
-Serial.printf("Read a change parent (my_ip: %s):\n", my_ip.toString().c_str());
 Serial.printf("Refused because reached max_children\n");
 #endif
         WIMP::ack(new_child, false);
     } else {
+        if (old_par.operator==(parent.ip)) {
+            //TODO: fratello bastardo
+#if debug
+Serial.println("My parent is the same as old parent! Shit");
+#endif
+            return;
+        }
+
         //add to children and send positive ack
-        //TODO: se old parent è uguale al mio parent, 
-        //devo ricorsivamente chiamare old parent su un neighbour 
-        //perchè non risolverei niente!
 
         children[num_children].ip = new_child;
-        children[num_children].len_path = path_length+1;
-        //TODO: send ack to children and change in the network to sink
-        num_children++; 
+        children[num_children].len_path = (uint8_t) (path_length+1);
+        num_children++;
 #if debug
-Serial.printf("Read a change parent (my_ip: %s):\n", my_ip.toString().c_str());
 Serial.printf("Child accepted! num_children=%d\n", num_children);
+Serial.println("Sending ack to the new child");
 #endif
         WIMP::ack(new_child, true);
 
         //inform sink
-        JsonObject& root = json_buffer.createObject();
-        root["type"] = "network_changed";
-        root["operation"] = "new_child";
-        root["ip_child"] = new_child.toString().c_str();
-        root["ip_parent"] = my_ip.toString().c_str();
+        JsonObject& risp = json_buffer.createObject();
+        risp["type"] = "network_changed";
+        risp["operation"] = "new_child";
+        risp["ip_child"] = new_child.toString().c_str();
+        risp["ip_parent"] = my_ip.toString().c_str();
         char data[LEN_PACKET];
-        root.printTo(data);
+        risp.printTo(data);
 
         WIMP::send(data);
 #if debug
-Serial.printf("Send change in the net to the raspi\n");
+Serial.printf("Sent change in the net to the raspy\n");
 #endif
+        json_buffer.clear();
     }
 }
-#pragma endregion
 
-/**
- * A child wants to leave me
-*/
-#pragma region read_leave
+
+/// Parse the received message of type leave
+/// \param root json object received
 void read_leave(JsonObject& root) {
     //my child is a piece of shit, I have to kill it
     IPAddress ip;
@@ -442,36 +435,30 @@ Serial.printf("Accepted, inform raspi\n");
 
     WIMP::send(data);
 }
-#pragma endregion
 
-/**
- * Deliver an old received packet to the application
- * or NULL if there is no pending packet
-*/
-#pragma region WIMP::retrieve_packet
-char* WIMP::retrieve_packet() {
-    if (message_waiting) {
-        char* msg = buffer[first_message];
-        first_message++;
-        first_message = (first_message % 10);
-        if (first_message == last_message) {
-            message_waiting = false;
-        }
-        return msg;
-    } else {
-        return NULL;
-    }
-}
-#pragma endregion
 
-/**
- * Sends to all the neighbours (parent+children+neighbours) info
- * on his IP, parent, number of children and path_lenght;
- * if parent doesn't answer, loop
- * type: HELLO or HELLO_RISP
-*/
-#pragma region hello
-void hello(IPAddress dest, const char* type) {  
+/// Deliver an old received packet to the application
+/// \return an old received packet or NULL if there is nothing
+//char* WIMP::retrieve_packet() {
+//    //TODO: potrebbe non servire!
+//    if (message_waiting) {
+//        char* msg = buffer[first_message];
+//        first_message++;
+//        first_message = (first_message % 10);
+//        if (first_message == last_message) {
+//            message_waiting = false;
+//        }
+//        return msg;
+//    } else {
+//        return NULL;
+//    }
+//}
+
+
+/// Sends to all the reachable nodes info on my self
+/// \param dest address to which send the packet
+/// \param type hello or hello_risp message
+void hello(IPAddress const& dest, const char* type) {
     char msg[LEN_PACKET];
     JsonObject& ans = json_buffer.createObject();
     
@@ -485,33 +472,23 @@ Serial.printf("Sending hello (my_ip: %s) (dest: %s)\n", my_ip.toString().c_str()
 Serial.printf("Data: %s\n", msg);
 #endif
 
-    //FIXME: la reference usa root.printTo(udp), forse così evito gli errori?
-
     udp_send(dest, PORT, msg);
     json_buffer.clear();
-
 }
-#pragma endregion
 
-/**
- * Look for udp packet arrived
- * check if they are for current esp -> save data
- * if they have to be forwarder -> call forward
- * if manage message (hello) -> call the right method
- * if ack/no answer needed -> nothing
- * if there are already pending messages (buffer not empty), maybe it should
- * first return those messages -> writes the message for the appl in data
- * returns the number of bytes read
-*/
-#pragma region WIMP::read
+
+/// Look for new udp packet incoming and checks the type of the packets
+/// \param data buffer in which write the received message for the application (if any)
+/// \return the number of bytes read, 0 if the messages were of management, -1 if errors
 int WIMP::read(char* data) {
 
-    //maybe need delay?
     int packet_size = udp.parsePacket();
     int i = 0;
+
 #if debug
     Serial.printf("Waiting for arriving packet ... \n");
 #endif
+
     while (!packet_size && i < 5) {
 #if debug
         Serial.printf(".");
@@ -519,6 +496,7 @@ int WIMP::read(char* data) {
         delay(250);
         i++;
     }
+
     //TODO: check if packet_size == len_packet
     if (packet_size <= 0) {
         //no packet arrived
@@ -528,7 +506,7 @@ int WIMP::read(char* data) {
         return 0;
     }
 
-    //there is some packet
+    //there is a packet
 #if debug
     Serial.printf("Received packet: %d byte from %s ip, port %d\n", 
                     packet_size, 
@@ -537,20 +515,30 @@ int WIMP::read(char* data) {
 #endif
 
     int len_packet = udp.read(data, LEN_PACKET);
+
+#if debug
+    Serial.printf("packet_size (from parse_packet): %d\nlen_packet (from actual read): %d\n", packet_size, len_packet);
+#endif
+
     if (len_packet > 0 && len_packet < LEN_PACKET) {
         //non so se serve...
         data[len_packet] = '\0';
     }
     
     JsonObject& root = json_buffer.parseObject(data);
-#if debug
-Serial.printf("Text of received packet: \n%s", data);
-root.prettyPrintTo(Serial); //credo...
-#endif
+
     if (!root.success()) {
-        Serial.println("Error in parsing received message!");
+#if debug
+Serial.println("Error in parsing received data!");
+#endif
+        json_buffer.clear();
         return -1;
     }
+
+#if debug
+Serial.printf("Text of received packet: \n%s", data);
+root.prettyPrintTo(Serial);
+#endif
 
     const char* handle = root["handle"];
 
@@ -560,7 +548,8 @@ Serial.println("Parsing a HELLO message");
 #endif
         read_hello(root);
         //always answer
-        hello(udp.remoteIP(), "hello_risp");//dice "deprecated conversion"
+        hello(udp.remoteIP(), "hello_risp");
+        json_buffer.clear();
         return 0;   //no message for application
     }
 
@@ -568,7 +557,8 @@ Serial.println("Parsing a HELLO message");
 #if debug
 Serial.println("Parsing a HELLO_RISP message");
 #endif
-        read_hello(root);    
+        read_hello(root);
+        json_buffer.clear();
         return 0;
     }
 
@@ -577,6 +567,7 @@ Serial.println("Parsing a HELLO_RISP message");
 Serial.println("Parsing a CHANGE message");
 #endif
         read_change(root);
+        json_buffer.clear();
         return 0;
     }
 
@@ -585,6 +576,7 @@ Serial.println("Parsing a CHANGE message");
 Serial.println("Parsing a LEAVE message");
 #endif
         read_leave(root);
+        json_buffer.clear();
         return 0;            
     }
 
@@ -592,7 +584,9 @@ Serial.println("Parsing a LEAVE message");
 #if debug
 Serial.println("Parsing a FORWARD_CHILDREN message");
 #endif
-        return read_forward_children(data, root);   
+        int ret = (int) read_forward_children(data, root);
+        json_buffer.clear();
+        return ret;
     }
 
     if (strcmp(handle, "forward_parent") == 0) {
@@ -600,6 +594,7 @@ Serial.println("Parsing a FORWARD_CHILDREN message");
 Serial.println("Parsing a FORWARD_PARENT message");
 #endif
         read_forward_parent(data);
+        json_buffer.clear();
         return 0;
     }
 
@@ -608,49 +603,41 @@ Serial.println("Parsing a FORWARD_PARENT message");
 Serial.println("Parsing a ACK message");
 #endif
         read_ack(root);
+        json_buffer.clear();
         return 0;
     }
 
     //this should be an error
+#if debug
+Serial.println("Qualquadra non cosa...");
+#endif
     return -1;
 }
-#pragma endregion
 
-/**
- * Send data to sink (and only to sink!)
- * loop is needed for reliability
- * returns true if also the ack is received, 
- * false if after some tries the packet is lost
-*/
-#pragma region WIMP::send
-bool WIMP::send(char* data) {
 
+//TODO: dovrà essere l'applicazione a fare il controllo degli ack!
+/// Sends data to sink (and only to sink!)
+/// \param data message to be sent to the sink
+void WIMP::send(char* data) {
     JsonObject& root = json_buffer.createObject();
     root["handle"] = "forward_parent";
     root["data"] = data;
 
-    char msg[256];
-    root.printTo(msg, root.measureLength() + 1);
+    char msg[LEN_PACKET];
+    root.printTo(msg, root.measureLength() + 1);    //TODO: check dim and \0
     //msg[root.measureLength()] = '\0';   //serve?
 
 #if debug
-Serial.printf("Sending a message to raspi (my_ip: %s) (parent: %s):\n", my_ip.toString().c_str(), parent.ip.toString().c_str());
+Serial.printf("Sending a message to raspy (my_ip: %s) (parent: %s):\n", my_ip.toString().c_str(), parent.ip.toString().c_str());
 Serial.printf("DATA: %s\n", msg);
 #endif
 
     udp_send(parent.ip, PORT, msg);
-
-    return false;
+    json_buffer.clear();
 }
-#pragma endregion
 
-/**
- * Calls all the needed functions for the first start (at least):
- * - hello()
- * - change_parent()
- * maybe it needs the local ip
-*/
-#pragma region manage_network
+
+/// Calls all the needed functions for the management of the network
 void WIMP::manage_network() {
 
     //dovrei avere almeno un parent sempre
@@ -688,16 +675,13 @@ Serial.printf("Parent ansered to hello (my_ip: %s):\n", my_ip.toString().c_str()
     //non lo cambio, anche se potrebbe esserci un nodo con path
     //minoreb  
 }
-#pragma endregion
 
-/**
- * Removes "connection" with old_parent
- * asks to new_parent to became the new parent,
- * has to wait for ack;
- * if errors, it has to be called again with a new new_parent
-*/
-#pragma region change_parent
-bool change_parent(IPAddress new_parent, IPAddress old_parent) {
+
+/// Sends a change message to the parent and if everything goes ok changes the current parent
+/// \param new_parent node that we want to become our new parent (destination of the message)
+/// \param old_parent old parent of this node
+/// \return true iff the change went ok
+bool change_parent(IPAddress const& new_parent, IPAddress const& old_parent) {
 
     JsonObject& root = json_buffer.createObject();
 
@@ -707,8 +691,6 @@ bool change_parent(IPAddress new_parent, IPAddress old_parent) {
 
     char data[LEN_PACKET];
     root.printTo(data);
-
-    parent.ip = new_parent; //non so se conviene farlo qui o nel chiamante
 
 #if debug
 Serial.printf("Sending change parent (my_ip: %s) (new_parent: %s) (old_parent: %s)\n", my_ip.toString().c_str(), new_parent.toString().c_str(), old_parent.toString().c_str());
@@ -735,17 +717,23 @@ if (positive_ack) {
 }
 #endif
 
+    if (positive_ack) {
+        parent.ip = new_parent;
+    }
+
+    //penso di doverlo fare ogni volta che costruisco un pacchetto, altrimenti si riempiono tutti i 512 byte
+    json_buffer.clear();
+
     return positive_ack;
 }
-#pragma endregion
 
-/**
- * Look for AP in the net
- * stores parent and neighbours (not children)
- * done only at init
-*/
-#pragma region scan_network
-void WIMP::scan_network() {
+
+/// Looks for AP in the net, stores parent and neighbours
+/// \return true iff the node managed to connect to another node and to find a parent
+bool WIMP::scan_network() {
+
+    //TODO: sarebbe più leggibile spezzandola in due, una funzione scan che riempie neighbours, e un'altra che cerca il parent
+
     int n = -1;
     bool found = false;
 
@@ -792,7 +780,7 @@ Serial.printf("Starting connection with %s\n", WiFi.SSID().c_str());
 #if debug
 Serial.println("Connected!");
 #endif
-                    found = true;   //found at least a WIMP_
+                    found = true;   //found at least a WIMP_ and I am connected
                     my_ip = WiFi.localIP();
 
                     neighbours[num_neighbours] = node_info {WiFi.gatewayIP(), WiFi.SSID(i), WiFi.RSSI(i), MAX_PATH_LENGTH, 0};
@@ -803,17 +791,17 @@ Serial.printf("IP local: %s\n", WiFi.localIP().toString().c_str());
 Serial.printf("Sending hello to %s\n", WiFi.gatewayIP().toString().c_str());
 #endif
                     hello(WiFi.gatewayIP(), "hello");//dice "deprecated conversion"
-                    parent_answer = false;
+                    //parent_answer = false;
                     char data[LEN_PACKET];
 
                     read(data);
-                    //non so se mi serve sapere se il parent mi ha risposto
 
                     WiFi.disconnect();
                     num_neighbours++;
                 }
             }
         }
+        //scan completed, free memory
         WiFi.scanDelete();
         if (!found) {
 #if debug
@@ -823,8 +811,6 @@ Serial.println("No WIMP AP found!");
             n = -1;
         }
     }
-
-
 
 #if debug
 Serial.printf("Networks found (pre sorting):\n");
@@ -844,7 +830,7 @@ for (int i=0; i<num_neighbours; ++i) {
 }
 #endif
 
-    //mi collego al primo -> dovrebbe essere il migliore tra path e segnale
+    //connect to ap with best path/signal
     bool connected = false;
     int i = 0;
     while (i < num_neighbours && !connected) {
@@ -860,47 +846,60 @@ Serial.printf("Trying to connect to: %s\n", neighbours[i].ssid.c_str());
         }
         if (WiFi.status() != WL_CONNECTED) {
             //non sono riuscito a connettermi
+#if debug
+Serial.printf("Failed to connect to %s\n", neighbours[i].ssid.c_str());
+#endif
             i++;
         } else {
 #if debug
 Serial.printf("Connected to: %s\n", neighbours[i].ssid.c_str());
 #endif
-            //ora sono connesso, devo farlo diventare mio padre
+            //this is the final connection, ask to the node if I can become one of its children
             my_ip = WiFi.localIP();
 #if debug
-            Serial.println("Sending a change parent");
+Serial.println("Sending a change parent");
 #endif
             if (change_parent(neighbours[i].ip, my_ip)) {
-                //cambio avvenuto correttamente
+                //change went ok
                 parent = node_info { neighbours[i].ip, neighbours[i].ssid, neighbours[i].rssi, MAX_PATH_LENGTH, 0 };
-                hello(parent.ip, "hello");  //prendo info sul path - deprecated conversion
+                hello(parent.ip, "hello");  //TODO: info sul path dovrebbe già essere in neighbours, controlla un po'!
                 connected = true;
 #if debug
 Serial.printf("I have been accepted as child\n");
 #endif
             } else {
-                Serial.println("ERROR! My parent refused me.");
+#if debug
+Serial.println("ERROR! My parent refused me.");
+#endif
                 i++;
             }
         }   
     }
     if (!connected) {
-        Serial.println("Not connected!");
+#if debug
+Serial.println("Not connected!");
+#endif
+        //no one as accepted me! :(
+        delay(10000);   //wait a bit to not clog the network
+        return false;
     }
     //sono connesso fisicamente al parent e conosco alcuni dei miei vicini, great!
+    return true;
 }
-#pragma endregion
 
-/**
- * Initializes the network
-*/
-#pragma region initialize
+
+/// Initializes the network
 void WIMP::initialize() {
 
-    //FIXME:
-    srand(static_cast<unsigned int>(time(nullptr)));
-    uint8_t chip_id;
-    chip_id = static_cast<uint8_t>((rand() % 254) + 1);   //system_get_chip_id();
+    //TODO: controlla che i valori così siano diversi
+
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(1, 254);
+
+    //srand((uint) time(NULL));
+    auto chip_id = (uint8_t) dis(gen);
+    //chip_id = static_cast<uint8_t>((rand() % 254) + 1);   //system_get_chip_id();
 
 #if debug
 Serial.printf("Random generated ip: %d\n", chip_id);
@@ -917,24 +916,6 @@ Serial.printf("Random generated ip: %d\n", chip_id);
     char ssid_name[10];
 
     sprintf(ssid_name, "WIMP_%d", chip_id);
-    /*if (chip_id >= 100) {
-        //3
-        ssid_name[5] = (chip_id/100) - '0';
-        ssid_name[6] = (chip_id/10) - '0';
-        ssid_name[7] = (chip_id%10) - '0';
-        ssid_name[8] = '\0';
-    } else {
-        if (chip_id >= 10) {
-            //2
-            ssid_name[5] = (chip_id/10) - '0';
-            ssid_name[6] = (chip_id%10) - '0';
-            ssid_name[7] = '\0';
-        } else {
-            //1
-            ssid_name[5] = chip_id - '0';
-            ssid_name[6] = '\0';
-        }
-    }*/
 
 
 #if debug
@@ -952,20 +933,22 @@ Serial.printf("SSID name: %s\n", ssid_name);
     //prepare to listen for messages to that port
     udp.begin(PORT);
 
-    WIMP::scan_network();
+    while (!WIMP::scan_network()) {
+        //loop forever until it manages to connect to someone
+        delay(5000);
+    }
 
-#if debug
+/*#if debug
     Serial.println("Starting first management");
-#endif
+#endif*/
 
-    WIMP::manage_network();
+    //non credo serva in realtà
+    //WIMP::manage_network();
 }
 
-/**
- * Asks the parent to remove me from his children
- * also this need a loop I guess
-*/
-#pragma region leave_me
+
+/// Asks the parent to remove me from his children
+/// \return true iff everything went ok
 bool leave_me() {
 
     JsonObject& root = json_buffer.createObject();
@@ -996,4 +979,3 @@ if (positive_ack) {
 
     return positive_ack;
 }
-#pragma endregion

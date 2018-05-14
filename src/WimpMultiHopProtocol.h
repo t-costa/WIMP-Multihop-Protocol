@@ -17,7 +17,7 @@ namespace WIMP {
     /**
      * 
     */
-    void ack(IPAddress dest, bool flag);
+    void ack(IPAddress const& dest, bool flag);
 
     /**
      * 
@@ -28,7 +28,7 @@ namespace WIMP {
      * Send data to sink (and only to sink!)
      * loop is needed for reliability
     */
-    bool send(char* data);
+    void send(char* data);
 
     /**
      * Calls all the needed functions for the first start (at least):
@@ -45,7 +45,7 @@ namespace WIMP {
      * checks if at least parent is alive
      * it can change parent if needed
     */
-    void scan_network();
+    bool scan_network();
 
     /**
      * Initializes the network
