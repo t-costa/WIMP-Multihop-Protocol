@@ -10,9 +10,6 @@
 #include <queue>
 #include <algorithm>
 
-/*#include "rapidjson/document.h"
-#include "rapidjson/writer.h"
-#include "rapidjson/stringbuffer.h"*/
 #include <nlohmann/json.hpp>
 
 #include "RaspServer.h"
@@ -21,13 +18,15 @@
 #define PORT 42100
 #define LEN_PACKET 512
 
-//using namespace rapidjson;
+#define MAX_CHILDREN 1
 
 using json = nlohmann::json;
 
 
 //child - parent
 std::unordered_map<const char*, const char*> routes;
+std::unordered_map<int32_t, const char*> id_ip;
+std::unordered_map<const char*, int32_t> ip_id;
 //initialize socket and structure
 int socket_info;
 struct sockaddr_in server;
@@ -35,6 +34,8 @@ struct sockaddr_in client;
 socklen_t cli_len = sizeof(client);
 char incoming_message[LEN_PACKET];
 std::queue<const char*> buffer;
+std::vector<std::string> children;
+int num_children = 0;
 bool wait_for_ack = false;
 
 
@@ -55,15 +56,12 @@ void WIMP::show_routes() {
             p = routes[p];  //is the child of someone
             parents.push_back(p);   //add other step of the path
         }
-        //TODO: check
         std::reverse(parents.begin(), parents.end());
         for (auto par : parents) {
             std::cout << par << " -> ";
         }
         std::cout << child << std::endl;
     }
-
-    //TODO: in realtà questo sarebbe un db, giusto per test
 }
 
 
@@ -91,6 +89,9 @@ void WIMP::change_route(const char* parent, const char* child) {
     "\n new parent: " << parent << std::endl;
 #endif
     }
+#if debug
+WIMP::show_routes();
+#endif
 }
 
 
@@ -99,7 +100,7 @@ void WIMP::change_route(const char* parent, const char* child) {
 /// \param child child that is changing the parent
 void WIMP::remove_route(const char* parent, const char* child) {
     if (routes.find(child) == routes.end() || routes[child] != parent) {
-        return; //non devo fare niente, l'info non c'è
+        return; //ok, no info
     }
     routes.erase(child);
 }
@@ -117,33 +118,28 @@ void send_direct(const char* dest, const char* data) {
     client.sin_port = htons(PORT);
 
 #if debug
-std::cout << client.sin_addr.s_addr << std::endl;
-std::cout << client.sin_port << std::endl;
-#endif
-
-#if debug
 std::cout << "Sending a message to " << dest << " type:\n " << data << std::endl;
 #endif
     cli_len = sizeof(client);
-    sendto(socket_info, (const char *) data, strlen(data),
+    sendto(socket_info, data, strlen(data),
         MSG_CONFIRM, (const struct sockaddr *) &client,
             cli_len);
 }
 
 
+//TODO: dovrai prendere l'ip in qualche modo!
 /// Reads an incoming message from a generic node
 /// \param data buffer in witch there will be written the received data (if any)
 /// \return number of bytes read, 0 if none for the application, -1 if an error occurred
 int WIMP::read(char* data) {
 
-    //TODO: aggiungi controllo su presenza vecchi messaggi, se c'è qualcosa
-    //restituisci direttamente quelli, solo se il buffer
-
     ssize_t rec_len;
     rec_len = recvfrom(socket_info, (char *) incoming_message, LEN_PACKET, MSG_WAITALL, (struct sockaddr *) &client, &cli_len);
 
-    if(rec_len  < 0) {      
-        std::cerr << "Received failed!" << std::endl;
+    if(rec_len  < 0) {
+#if debug
+std::cerr << "Received failed!" << std::endl;
+#endif
         return -1;
     }
 
@@ -152,34 +148,29 @@ int WIMP::read(char* data) {
 #if debug
 std::cout << "Received message: " << incoming_message << std::endl;
 #endif
+
     //parse the json
-    //Document doc;
-    //doc.Parse(incoming_message);
     json doc;
     try {
         doc = json::parse(incoming_message);
-    } catch  (json::parse_error e) {
+    } catch  (json::parse_error &e) {
         std::cerr << "Error in parsing!" << std::endl;
         return -1;
     }
 
-
-    //assert(doc.IsObject());
-
     std::string handle = doc["handle"].get<std::string>();
 
     if (doc.find("handle") == doc.end()) {
-        std::cerr << "Parsing errorm handle=NULL" << std::endl;
+        std::cerr << "Parsing error handle=NULL" << std::endl;
         return -1;
     }
 
-    if (handle.compare("hello") == 0) {
+    if (handle == "hello") {
 #if debug
 std::cout << "Parsing a HELLO message" << std::endl;
 #endif
         //answer with an hello, let the others know you are the sink
-        //TODO: check ip
-        const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0})";
+        const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0"})";
         std::string dest = doc["ip"].get<std::string>();
 
         if (doc.find("ip") == doc.end()) {
@@ -191,7 +182,7 @@ std::cout << "Parsing a HELLO message" << std::endl;
         return 0;   //no message for application
     }
 
-    if (handle.compare("hello_risp") == 0) {
+    if (handle == "hello_risp") {
 #if debug
 std::cout << "Parsing a HELLO_RISP message (discarded)" << std::endl;
 #endif
@@ -199,7 +190,7 @@ std::cout << "Parsing a HELLO_RISP message (discarded)" << std::endl;
         return 0;
     }
 
-    if (handle.compare("change") == 0) {
+    if (handle == "change") {
 #if debug
 std::cout << "Parsing a CHANGE message" << std::endl;
 #endif
@@ -211,15 +202,26 @@ std::cout << "Parsing a CHANGE message" << std::endl;
             return -1;
         }
 
-        WIMP::change_route("Sink", source.c_str());
+        if (num_children >= MAX_CHILDREN) {
+            //can't have more children
+#if debug
+std::cout << "Received a change request, but I have too many children!" << std::endl;
+#endif
+            //send negative ack
+            const char* ack = R"({"handle":"ack","type":"false"})";
+            send_direct(source.c_str(), ack);
+            return 0;
+        }
 
-        //TODO: se aggiungi altre strutture fai le op necessarie
+        WIMP::change_route("Sink", source.c_str());
+        children.push_back(source);
+        num_children++;
         const char* ack = R"({"handle":"ack","type":"true"})";
         send_direct(source.c_str(), ack);
         return 0;
     }
 
-    if (handle.compare("leave") == 0) {
+    if (handle == "leave") {
 #if debug
 std::cout << "Parsing a LEAVE message" << std::endl;
 #endif
@@ -230,6 +232,17 @@ std::cout << "Parsing a LEAVE message" << std::endl;
             return -1;
         }
         routes.erase(source.c_str());
+        //remove child
+        auto i_remove = children.end();
+        for (auto it = children.begin(); it != children.end(); it++) {
+            if (*it == source) {
+                i_remove = it;
+            }
+        }
+        if (i_remove != children.end()) {
+            children.erase(i_remove);
+            num_children--;
+        }
 
 #if debug
 std::cout << "Source leave: " << source << std::endl;
@@ -240,7 +253,7 @@ std::cout << "Source leave: " << source << std::endl;
         return 0;            
     }
 
-    if (handle.compare("forward_children") == 0) {
+    if (handle == "forward_children") {
 #if debug
 std::cout << "Parsing a FORWARD_CHILDREN message (discarded)" << std::endl;
 #endif
@@ -248,7 +261,7 @@ std::cout << "Parsing a FORWARD_CHILDREN message (discarded)" << std::endl;
         return 0;   
     }
 
-    if (handle.compare("forward_parent") == 0) {
+    if (handle == "forward_parent") {
 #if debug
 std::cout << "Parsing a FORWARD_PARENT message" << std::endl;
 #endif
@@ -275,7 +288,7 @@ std::cout << "Data: " << data << std::endl;
             return -1;
         }
 
-        if (type.compare("network_changed") == 0) {
+        if (type == "network_changed") {
             //it's management
             std::string op = data_value["operation"].get<std::string>();
             std::string child = data_value["ip_child"].get<std::string>();
@@ -294,17 +307,17 @@ std::cout << "Data: " << data << std::endl;
                 return -1;
             }
 
-            if (op.compare("new_child") == 0) {
+            if (op == "new_child") {
                 WIMP::change_route(parent.c_str(), child.c_str());
                 return 0;
             }
-            if (op.compare("removed_child") == 0) {
+            if (op == "removed_child") {
                 WIMP::remove_route(parent.c_str(), child.c_str());
                 return 0;
             }
-            //sarebbe errore
-            //return -1;
-            std::cerr << "Unexpected error in parsing forward_parent" << std::endl;
+#if debug
+std::cerr << "Unexpected error in parsing forward_parent" << std::endl;
+#endif
             return -1;
         } else {
             //for application
@@ -313,7 +326,7 @@ std::cout << "Data: " << data << std::endl;
         }
     }
 
-    if (handle.compare("ack") == 0) {
+    if (handle == "ack") {
 #if debug
 std::cout << "Parsing a ACK message" << std::endl;
 #endif
@@ -327,6 +340,9 @@ std::cout << "Parsing a ACK message" << std::endl;
     }
 
     //this should be an error
+#if debug
+std::cerr << "qualquadra non cosa" << std::endl;
+#endif
     return -1;
 }
 
@@ -336,6 +352,10 @@ std::cout << "Parsing a ACK message" << std::endl;
 /// order to reach the destination
 std::vector<const char*> get_path(const char* dest) {
     std::vector<const char*> path;
+
+    if (routes.find(dest) == routes.end()) {
+        return path;
+    }
 
     const char* p = routes[dest];
     while (!strcmp(p, "Sink")) {
@@ -359,37 +379,57 @@ bool WIMP::send(const char* data, const char* dest) {
     //il path che deve fare il messaggo
     // document is the root of a json message
     json document;
+
+#if debug
+std::cout << "Original message to be sent: " << data << std::endl;
+#endif
+
     std::vector<const char*> path = get_path(dest);
-    //TODO: add check correctness path and type of j_vec
-    json j_vec = path;
 
     document["handle"] = "forward_children";
-    document["path"] = j_vec;
+
+    if (path.empty()) {
+        if (strcmp(dest, "255.255.255.255") != 0) {
+            std::cerr << "Error in searching the path, dest not found" << std::endl;
+            return false;
+        }
+        //send in broadcast
+#if debug
+std::cout << "Sending message in broadcast" << std::endl;
+#endif
+        document["path"] = "broadcast";
+    } else {
+#if debug
+std::cout << "Sending message in unicast" << std::endl;
+#endif
+        json j_vec = path;
+        document["path"] = j_vec;
+    }
+
+    document["data"] = data;
 
     client.sin_family = AF_INET;
     client.sin_addr.s_addr = inet_addr(dest);
-    //TODO: se non funziona, cambia con questo
     //inet_pton(AF_INET, dest, &(client.sin_addr.s_addr));
     client.sin_port = htons(PORT);
 
 #if debug
-    std::cout << client.sin_addr.s_addr << std::endl;
-    std::cout << client.sin_port << std::endl;
-    std::cout << document << std::endl;
+std::cout << client.sin_addr.s_addr << std::endl;
+std::cout << client.sin_port << std::endl;
+std::cout << document << std::endl;
 #endif
+
+    const char* payload = document.dump().c_str();
 
     wait_for_ack = true;
     int _try = 0;
     while (wait_for_ack && _try < 5) {
-        sendto(socket_info, document.get<std::string>().c_str(), strlen(data),
+        sendto(socket_info, payload, strlen(data),
                MSG_CONFIRM, (const struct sockaddr *) &client,
                cli_len);
 
-        char risp[LEN_PACKET];
-        int n = read(risp);
-        if (n > 0) {
-            //TODO: should push data to application!
-        }
+        //sleep(5);    //o 5? -> il thread read si occuperà del resto
+
         _try++;
     }
 
@@ -406,9 +446,8 @@ bool WIMP::initialize() {
         return false;
     }
 #if debug
-    std::cout << "Socket created" << std::endl;
+std::cout << "Socket created" << std::endl;
 #endif
-    //TODO: should clear address structure
 
     memset(&server, 0, sizeof(server));
     memset(&client, 0, sizeof(client));
@@ -419,8 +458,8 @@ bool WIMP::initialize() {
     server.sin_port = htons( PORT );
 
 #if debug
-    std::cout << server.sin_addr.s_addr << std::endl;
-    std::cout << server.sin_port << std::endl;
+std::cout << server.sin_addr.s_addr << std::endl;
+std::cout << server.sin_port << std::endl;
 #endif
 
     //bind socket with ip
@@ -429,7 +468,7 @@ bool WIMP::initialize() {
         return false;
     }
 #if debug
-    std::cout << "Bind done" << std::endl;
+std::cout << "Bind done" << std::endl;
 #endif
     return true;
 }

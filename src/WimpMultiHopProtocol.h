@@ -39,13 +39,13 @@ namespace WIMP {
     */
     void manage_network();
 
-    /**
-     * Look for AP in the net
-     * stores parent and neighbours (not children)
-     * checks if at least parent is alive
-     * it can change parent if needed
-    */
-    bool scan_network();
+//    /**
+//     * Look for AP in the net
+//     * stores parent and neighbours (not children)
+//     * checks if at least parent is alive
+//     * it can change parent if needed
+//    */
+//    bool scan_network();
 
     /**
      * Initializes the network

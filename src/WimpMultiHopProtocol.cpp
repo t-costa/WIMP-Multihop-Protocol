@@ -5,8 +5,11 @@
 #include "WimpMultiHopProtocol.h"
 
 #include <cstring>
+#include <string>
 #include <ctime>
-#include <random>
+#include <sstream>
+//#include <random>
+
 
 
 #define PORT 42100
@@ -15,17 +18,18 @@
 #define LEN_BUFFER 10
 #define LEN_PACKET 256
 #define MAX_PATH_LENGTH 255
+#define MAX_TIME_NOT_SEEN 5
 
 #define debug true
 
-//TODO: AGGIUNGI SSID E RSSI ALL'HELLO
+//TODO: FORSE LA COSA PIÙ FACILE È DEFINIRE DUE READ DIVERSE, PER MANAGEMENT E PER APPLICAZIONE, DOVE CONTROLLI VECCHI PACCHETTI
 
 struct node_info {
     IPAddress ip;
     String ssid;
-    int32_t rssi{};
-    uint8_t len_path{};
-    uint8_t times_not_seen{};
+    int32_t rssi;
+    uint8_t len_path;
+    uint8_t times_not_seen;
 };
 
 //maybe they could be an association ID-IP
@@ -38,12 +42,17 @@ node_info neighbours[MAX_NEIGHBOURS];   //dovrebbe essere ordinato per path_leng
 char buffer[LEN_BUFFER][LEN_PACKET];  //keep list of incoming messages (circular)
 bool wait_for_ack = false, positive_ack = false, message_waiting = false, parent_answer = false;
 uint8_t first_message = 0, last_message = 0, path_length = MAX_PATH_LENGTH, num_children = 0, num_neighbours = 0;
+char ssid_name[10];
+const char* ssid = "WIMP_";
+const char* password = "7settete7&IPA";
 
-//const char* ssid = "WIMP_";
-//const char* password = "7settete7&IPA";
+uint32_t test_id = 0;
 
-const char* ssid = "Mi";
-const char* password = "4e8b149679da";
+//const char* ssid = "FRITZ";
+//const char* password = "HirmerDiGuardoAmicoFRITZ";
+
+//const char* ssid = "Mi";
+//const char* password = "4e8b149679da";
 
 StaticJsonBuffer<LEN_PACKET> json_buffer;
 
@@ -53,7 +62,6 @@ StaticJsonBuffer<LEN_PACKET> json_buffer;
 /// \param port_dest port of the destination
 /// \param data message to be sent
 void udp_send(IPAddress const& ip_dest, uint16_t port_dest, char* data) {
-    //TODO: potrebbe servire un check disponibiltà o robe del genere di esp
     udp.beginPacket(ip_dest, port_dest);
     udp.write(data);
     udp.endPacket();
@@ -161,12 +169,31 @@ void read_ack(JsonObject& root) {
 /// \param root json received
 void read_hello(JsonObject& root) {
 
-    IPAddress other;
     uint8_t other_path;
-	String s;
+    String s;
 
-	root["ip"].printTo(s);
-	other.fromString(s);
+    root["ip"].printTo(s);  //stores "...."
+    uint8_t b[4];
+
+    int i=s.length()-2, j=3;
+    int acc = 1;
+    for (int k=0; k<4; ++k) {
+        b[i] = 0;
+    }
+
+	while (i > 0) {
+        b[j] += (s[i]-48)*acc;
+        acc *= 10;
+        i--;
+        if (i >= 0 && s[i] == '.') {
+            i--;
+            acc = 1;
+            j--;
+        }
+	}
+    b[3]++; //FIXME
+	IPAddress other(b[0], b[1], b[2], b[3]);
+
     other_path = root["path"];
 
 #if debug
@@ -185,7 +212,7 @@ Serial.printf("IP: %s\n PATH: %d\n", other.toString().c_str(), other_path);
         parent.len_path = other_path;
         parent.times_not_seen = 0;
     } else {
-        int i = search(other, children, MAX_CHILDREN);
+        int i = search(other, children, num_children);
         if (i != -1) {
             //update info of child
 #if debug
@@ -196,7 +223,7 @@ Serial.printf("IP: %s\n PATH: %d\n", other.toString().c_str(), other_path);
             children[i].len_path = (uint8_t) ((other_path < path_length+1) ? other_path : path_length+1);
             children[i].times_not_seen = 0;
         } else {
-            i = search(other, neighbours, MAX_NEIGHBOURS);
+            i = search(other, neighbours, num_neighbours);
             if (i != -1) {
                 //known neighbour
 #if debug
@@ -214,14 +241,15 @@ Serial.printf("IP: %s\n PATH: %d\nNum_neighbours: %d\n", other.toString().c_str(
 #endif
                 if (num_neighbours < MAX_NEIGHBOURS) {
                     //add the new neighbour it
-                    //FIXME: servono ssid e rssi
-                    neighbours[num_neighbours] = node_info {other, "NULL", 0, other_path, 0};
+                    char* sn;   //TODO:CHECK
+                    root["ssid"].printTo(sn);
+                    neighbours[num_neighbours] = node_info { other, sn, -75, other_path, 0 };
                     num_neighbours++;
                 }
 #if debug
-                else {
-                    Serial.println("Can't add the new neighbour! There are too many! :(");
-                }
+else {
+    Serial.println("Can't add the new neighbour! There are too many! :(");
+}
 #endif
             }
         }
@@ -396,7 +424,7 @@ Serial.printf("Sent change in the net to the raspy\n");
 void read_leave(JsonObject& root) {
     //my child is a piece of shit, I have to kill it
     IPAddress ip;
-    ip.fromString(root["ip_source"].as<char*>());//asString() deprecato
+    ip.fromString(root["ip_source"].as<char*>());
     
     int index = search(ip, children, num_children);
 
@@ -465,6 +493,9 @@ void hello(IPAddress const& dest, const char* type) {
     ans["handle"] = type;
     ans["ip"] = my_ip.toString();
     ans["path"] = path_length;
+    ans["ssid"] = ssid_name;
+    ans["test_id"] = test_id;
+    test_id++;
     ans.printTo(msg);
 
 #if debug
@@ -489,7 +520,7 @@ int WIMP::read(char* data) {
     Serial.printf("Waiting for arriving packet ... \n");
 #endif
 
-    while (!packet_size && i < 5) {
+    while (!packet_size && i < 20) {
 #if debug
         Serial.printf(".");
 #endif
@@ -615,7 +646,7 @@ Serial.println("Qualquadra non cosa...");
 }
 
 
-//TODO: dovrà essere l'applicazione a fare il controllo degli ack!
+//TODO: dovrà essere l'applicazione a fare il controllo degli ack! -> forse non serve
 /// Sends data to sink (and only to sink!)
 /// \param data message to be sent to the sink
 void WIMP::send(char* data) {
@@ -623,9 +654,12 @@ void WIMP::send(char* data) {
     root["handle"] = "forward_parent";
     root["data"] = data;
 
+    root["test_id"] = test_id;
+    test_id++;
+
     char msg[LEN_PACKET];
     root.printTo(msg, root.measureLength() + 1);    //TODO: check dim and \0
-    //msg[root.measureLength()] = '\0';   //serve?
+    msg[root.measureLength()] = '\0';   //serve?
 
 #if debug
 Serial.printf("Sending a message to raspy (my_ip: %s) (parent: %s):\n", my_ip.toString().c_str(), parent.ip.toString().c_str());
@@ -640,40 +674,73 @@ Serial.printf("DATA: %s\n", msg);
 /// Calls all the needed functions for the management of the network
 void WIMP::manage_network() {
 
-    //dovrei avere almeno un parent sempre
     IPAddress broadcast(255, 255, 255, 255);
 
 #if debug
 Serial.printf("Sending hello in broadcast (my_ip: %s):\n", my_ip.toString().c_str());
 #endif
 
-    //manda hello a tutti (sarebbero parent e children in teoria)
-    hello(broadcast, "hello");//dice "deprecated conversion"
-
-    //teoricamente dovrei aspettare un po' e fare la read
-    char data[LEN_PACKET];
     parent_answer = false;
+    int _try = 0;
+
+    //update liveness of children
+    for (int i=0; i<num_children; ++i) {
+        children[i].times_not_seen++;
+    }
+
+    while (!parent_answer && _try < 3) {
+#if debug
+Serial.printf("Preparing to send hello in broadcast, try = %d\n", _try);
+#endif
+
+        hello(broadcast, "hello");
+
+        char data[LEN_PACKET];
 #if debug
 Serial.printf("Preparing to read answer (my_ip: %s):\n", my_ip.toString().c_str());
 #endif
 
-    read(data); //elabora risposte ricevute
+        delay(1000);
 
-    //TODO:
+        read(data);
+        _try++;
+    }
+
     if (!parent_answer) {
-        //so cazzi, potrei provarci un'altra volta o fallire
-        //direttamente e fare scan
 #if debug
 Serial.printf("Parent didn't answer to hello (my_ip: %s):\n", my_ip.toString().c_str());
 #endif
+        //TODO: direi che dovrei mandare il leave_me, prendere il primo nodo in neighbours != da parent e fare  il change
+        //TODO: se non trovo un altro nodo dovrò rifare initialize/scan_network...
     } else {
 #if debug
 Serial.printf("Parent ansered to hello (my_ip: %s):\n", my_ip.toString().c_str());
 #endif
     }
-    //altrimenti tutto ok, diciamo che finchè il parent risponde 
-    //non lo cambio, anche se potrebbe esserci un nodo con path
-    //minoreb  
+
+    for (int i=0; i<num_children; ++i) {
+        if (children[i].times_not_seen >= MAX_TIME_NOT_SEEN) {
+            //remove children
+            swap(children, i, num_children-1);//lo metto alla fine
+            num_children--;//non considero più l'ultimo nodo
+            //TODO: avvisa sink
+        }
+    }
+
+#if debug
+Serial.printf("my parent: IP %s \t SSID: %s\t len_path: %d\t rssi: %d\t tns: %d\n",
+        parent.ip.toString().c_str(), parent.ssid.c_str(), parent.len_path, parent.rssi, parent.times_not_seen);
+Serial.printf("Number of children: %d\n", num_children);
+for (int i=0; i<num_children; ++i) {
+    Serial.printf("children[%d]: IP %s \t SSID: %s\t len_path: %d\t rssi: %d\t tns: %d\n",
+                  i, children[i].ip.toString().c_str(), children[i].ssid.c_str(), children[i].len_path, children[i].rssi, children[i].times_not_seen);
+}
+Serial.printf("Number of neighbours: %d\n", num_neighbours);
+for (int i=0; i<num_neighbours; ++i) {
+    Serial.printf("Neighbours[%d]: IP %s \t SSID: %s\t len_path: %d\t rssi: %d\t tns: %d\n",
+                  i, neighbours[i].ip.toString().c_str(), neighbours[i].ssid.c_str(), neighbours[i].len_path, neighbours[i].rssi, neighbours[i].times_not_seen);
+}
+#endif
 }
 
 
@@ -688,6 +755,8 @@ bool change_parent(IPAddress const& new_parent, IPAddress const& old_parent) {
     root["handle"] = "change";
     root["ip_source"] = my_ip.toString();
     root["ip_old_parent"] = old_parent.toString();
+    root["test_id"] = test_id;
+    test_id++;
 
     char data[LEN_PACKET];
     root.printTo(data);
@@ -706,6 +775,9 @@ Serial.printf("Data: %s\n", data);
 #if debug
 Serial.printf("Waiting for ack (my_ip: %s)\n", my_ip.toString().c_str());
 #endif
+
+    delay(1000);
+
     WIMP::read(data);
     //se è false, dovrà essere chiamata di nuovo con un new parent
 
@@ -728,93 +800,12 @@ if (positive_ack) {
 }
 
 
-/// Looks for AP in the net, stores parent and neighbours
-/// \return true iff the node managed to connect to another node and to find a parent
-bool WIMP::scan_network() {
-
-    //TODO: sarebbe più leggibile spezzandola in due, una funzione scan che riempie neighbours, e un'altra che cerca il parent
-
-    int n = -1;
-    bool found = false;
-
-    while (!found) {
-        WiFi.scanNetworks(true);
-
-#if debug
-Serial.println("Scan started");
-#endif
-
-        while (n == -1) {
-            n = WiFi.scanComplete();
-            delay(250);
-            if (n == 0) {
-                Serial.println("No network found! Scan again");
-                WiFi.scanNetworks(true);
-                n = -1;
-            }
-        }
-        //se non ci sono reti non esce mai dal loop...
-#if debug
-Serial.printf("%d network(s) found\n", n);
-#endif
-
-        for (int i = 0; i < n; i++) {
-#if debug
-Serial.printf("%d: %s, Ch:%d (%ddBm) %s\n", i + 1,
-                  WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i),
-                  WiFi.encryptionType(i) == ENC_TYPE_NONE ? "open" : "closed");
-#endif
-
-            if (WiFi.SSID(i).startsWith(ssid) && num_neighbours < MAX_NEIGHBOURS) {
-                WiFi.begin(WiFi.SSID(i).c_str(), password);
-#if debug
-Serial.printf("Starting connection with %s\n", WiFi.SSID().c_str());
-#endif
-                int j = 0;
-                while (WiFi.status() != WL_CONNECTED && j < 10) {
-                    delay(500);
-                    j++;
-                }
-
-                if (WiFi.status() == WL_CONNECTED) {
-#if debug
-Serial.println("Connected!");
-#endif
-                    found = true;   //found at least a WIMP_ and I am connected
-                    my_ip = WiFi.localIP();
-
-                    neighbours[num_neighbours] = node_info {WiFi.gatewayIP(), WiFi.SSID(i), WiFi.RSSI(i), MAX_PATH_LENGTH, 0};
-                    //send hello to know the path (and let the other know you)
-#if debug
-Serial.printf("IP AP: %s\n", WiFi.softAPIP().toString().c_str());
-Serial.printf("IP local: %s\n", WiFi.localIP().toString().c_str());
-Serial.printf("Sending hello to %s\n", WiFi.gatewayIP().toString().c_str());
-#endif
-                    hello(WiFi.gatewayIP(), "hello");//dice "deprecated conversion"
-                    //parent_answer = false;
-                    char data[LEN_PACKET];
-
-                    read(data);
-
-                    WiFi.disconnect();
-                    num_neighbours++;
-                }
-            }
-        }
-        //scan completed, free memory
-        WiFi.scanDelete();
-        if (!found) {
-#if debug
-Serial.println("No WIMP AP found!");
-#endif
-            delay(5000);
-            n = -1;
-        }
-    }
-
+/// Select the best node in neighbours to become the new (or first) parent
+/// \return true iff the functon managed to find a parent
+bool final_connect() {
 #if debug
 Serial.printf("Networks found (pre sorting):\n");
-Serial.printf("IP \t\t SSID \t RSSI \t PATh \t LTS\n");
+Serial.printf("IP \t\t SSID \t RSSI \t PATH \t LTS\n");
 for (int i=0; i<num_neighbours; ++i) {
     Serial.printf("%s \t %s \t %d \t %d \t %d\n", neighbours[i].ip.toString().c_str(), neighbours[i].ssid.c_str(), neighbours[i].rssi, neighbours[i].len_path, neighbours[i].times_not_seen);
 }
@@ -824,7 +815,7 @@ for (int i=0; i<num_neighbours; ++i) {
 
 #if debug
 Serial.printf("Networks found (post sorting):\n");
-Serial.printf("IP \t\t SSID \t RSSI \t PATh \t LTS\n");
+Serial.printf("IP \t\t SSID \t RSSI \t PATH \t LTS\n");
 for (int i=0; i<num_neighbours; ++i) {
     Serial.printf("%s \t %s \t %d \t %d \t %d\n", neighbours[i].ip.toString().c_str(), neighbours[i].ssid.c_str(), neighbours[i].rssi, neighbours[i].len_path, neighbours[i].times_not_seen);
 }
@@ -845,7 +836,7 @@ Serial.printf("Trying to connect to: %s\n", neighbours[i].ssid.c_str());
             _try++;
         }
         if (WiFi.status() != WL_CONNECTED) {
-            //non sono riuscito a connettermi
+            //connection failed, try the next one
 #if debug
 Serial.printf("Failed to connect to %s\n", neighbours[i].ssid.c_str());
 #endif
@@ -861,8 +852,8 @@ Serial.println("Sending a change parent");
 #endif
             if (change_parent(neighbours[i].ip, my_ip)) {
                 //change went ok
-                parent = node_info { neighbours[i].ip, neighbours[i].ssid, neighbours[i].rssi, MAX_PATH_LENGTH, 0 };
-                hello(parent.ip, "hello");  //TODO: info sul path dovrebbe già essere in neighbours, controlla un po'!
+                parent = node_info { neighbours[i].ip, neighbours[i].ssid, neighbours[i].rssi, neighbours[i].len_path, 0 };
+                hello(parent.ip, "hello");
                 connected = true;
 #if debug
 Serial.printf("I have been accepted as child\n");
@@ -873,7 +864,7 @@ Serial.println("ERROR! My parent refused me.");
 #endif
                 i++;
             }
-        }   
+        }
     }
     if (!connected) {
 #if debug
@@ -883,23 +874,120 @@ Serial.println("Not connected!");
         delay(10000);   //wait a bit to not clog the network
         return false;
     }
-    //sono connesso fisicamente al parent e conosco alcuni dei miei vicini, great!
+    //I'm connected to a parent, everything great!
     return true;
+}
+
+
+/// Looks for AP in the net, calls method to find a parent
+/// \return true iff the node managed to connect to another node and to find a parent
+bool scan_network() {
+
+    int n = -1;
+    bool found = false;
+
+    while (!found) {
+        WiFi.scanNetworks(true);
+
+#if debug
+Serial.println("Scan started");
+#endif
+
+        while (n == -1) {
+            n = WiFi.scanComplete();
+            delay(250);
+            if (n == 0) {
+#if debug
+Serial.println("No network found! Scan again");
+#endif
+                delay(2000);
+                WiFi.scanNetworks(true);
+                n = -1;
+            }
+        }
+#if debug
+Serial.printf("%d network(s) found\n", n);
+#endif
+
+        for (uint8_t i = 0; i < n; i++) {
+#if debug
+Serial.printf("%d: %s, Ch:%d (%ddBm) %s\n", i + 1,
+              WiFi.SSID(i).c_str(), WiFi.channel(i), WiFi.RSSI(i),
+              WiFi.encryptionType(i) == ENC_TYPE_NONE ? "open" : "closed");
+#endif
+
+            if (WiFi.SSID(i).startsWith(ssid) && num_neighbours < MAX_NEIGHBOURS) {
+                WiFi.begin(WiFi.SSID(i).c_str(), password);
+#if debug
+Serial.printf("Starting connection with %s\n", WiFi.SSID().c_str());
+#endif
+                int j = 0;
+                while (WiFi.status() != WL_CONNECTED && j < 20) {
+#if debug
+Serial.printf(".");
+#endif
+                    delay(600);
+                    j++;
+                }
+
+                if (WiFi.status() == WL_CONNECTED) {
+#if debug
+Serial.println("Connected!");
+#endif
+                    found = true;   //found at least a WIMP_ and I am connected
+                    my_ip = WiFi.localIP();
+
+                    neighbours[num_neighbours] = node_info{WiFi.gatewayIP(), WiFi.SSID(i), WiFi.RSSI(i),
+                                                           MAX_PATH_LENGTH, 0};
+                    //send hello to know the path (and let the other know you)
+#if debug
+Serial.printf("IP AP: %s\n", WiFi.softAPIP().toString().c_str());
+Serial.printf("IP local: %s\n", WiFi.localIP().toString().c_str());
+Serial.printf("Sending hello to %s\n", WiFi.gatewayIP().toString().c_str());
+#endif
+                    hello(WiFi.gatewayIP(), "hello");
+                    //parent_answer = false;
+                    char data[LEN_PACKET];
+
+                    delay(1000);
+
+                    WIMP::read(data);
+
+                    WiFi.disconnect();
+                    num_neighbours++;
+                }
+#if debug
+else {
+    Serial.println("Not connected");
+}
+#endif
+            }
+        }
+        //scan completed, free memory
+        WiFi.scanDelete();
+        if (!found) {
+#if debug
+Serial.println("No WIMP AP found!");
+#endif
+            delay(5000);
+            n = -1;
+            //num_neighbours = 0;
+        }
+    }
+    return final_connect();
 }
 
 
 /// Initializes the network
 void WIMP::initialize() {
+//    std::random_device rd;
+//    std::mt19937 gen(rd());
+//    std::uniform_int_distribution<> dis(1, 254);
 
-    //TODO: controlla che i valori così siano diversi
-
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> dis(1, 254);
-
-    //srand((uint) time(NULL));
-    auto chip_id = (uint8_t) dis(gen);
-    //chip_id = static_cast<uint8_t>((rand() % 254) + 1);   //system_get_chip_id();
+    srand((uint) time(NULL));
+    //auto chip_id = (uint8_t) dis(gen);
+    auto chip_id = static_cast<uint8_t>((rand() % 254) + 1);   //system_get_chip_id();
+    //TODO: POSSO ACCEDERE AL MAC DEL NODO, POTREI COSTRUIRMI L'IP DA QUELLO
 
 #if debug
 Serial.printf("Random generated ip: %d\n", chip_id);
@@ -908,42 +996,29 @@ Serial.printf("Random generated ip: %d\n", chip_id);
     IPAddress ip(151, 151, 12, chip_id);
     IPAddress gateway(192,168,1,9);
     IPAddress subnet(255,255,255,0);
-    //credo la rete dovrebbe essere hidden
+    //TODO: check hidden network
     WiFi.softAPConfig(ip, gateway, subnet);
 
-
-    //const char* ssid_name = ssid + chip_id; //funzionerà?
-    char ssid_name[10];
-
     sprintf(ssid_name, "WIMP_%d", chip_id);
-
 
 #if debug
 Serial.printf("SSID name: %s\n", ssid_name);
 #endif
     WiFi.softAP(ssid_name, password);
 
-    //WiFi.mode(WIFI_AP_STA); potrebbe dare problemi
-    //parent = node_info{ my_ip, NULL, 150, MAX_PATH_LENGTH, 0 };
+    //WiFi.mode(WIFI_AP_STA); //problems?
 
 #if debug
-    Serial.println("Starting scan network...");
+Serial.println("Starting scan network...");
 #endif
 
     //prepare to listen for messages to that port
     udp.begin(PORT);
 
-    while (!WIMP::scan_network()) {
+    while (!scan_network()) {
         //loop forever until it manages to connect to someone
         delay(5000);
     }
-
-/*#if debug
-    Serial.println("Starting first management");
-#endif*/
-
-    //non credo serva in realtà
-    //WIMP::manage_network();
 }
 
 
@@ -964,9 +1039,12 @@ Serial.printf("Data: %s\n", data);
 #endif
 
     udp_send(parent.ip, PORT, data);
-    //forse un delay piccolo piccolo ci può stare...
+
     wait_for_ack = true;
     positive_ack = false;
+
+    delay(1000);
+
     WIMP::read(data);
 
 #if debug
