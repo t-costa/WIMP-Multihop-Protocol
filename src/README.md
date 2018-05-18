@@ -26,7 +26,19 @@ received answer < - - - - - - - - - sends positive ack
 
 ## TODO
 Try sending messages of type forward and leave, just to check the data structures and that everything is ok,
-then we need to add a third node, so that we can form a chain and try some real multihop (number of children is limited to one), if everything works, try to kill the middle node, and see if the network recovers itself
+then we need to add a third node, so that we can form a chain and try some real multihop (number of children is limited to one), if everything works, try to kill the middle node, and see if the network recovers itself.
+
+Modify read, with a public (called only by the application) and a private (called internally by the public one and the management), so that the public one can push data received during the management process.
+
+The random generated number is not random.
+
+Serve testare la consistenza delle strutture dati interne.
+
+Forse (probabilmente) serve aggiungere un id/ipsource all'ack.
+
+Modifica per il network changed, sia in esp che in raspy (read_change, read_leave). -> ora i messaggi applicazione dovrebbero poter essere in qualsiasi formato!
+
+Credo manchi qualcosa nella creazione di children, mi sa che qualche campo resta non settato.
 
 ## Type of messages
 The following is a list of all the possible messages that can be exchanged by the ESP nodes and the sink, some of the messages might not be used in the final project (such as leave), due to lack of time.
@@ -37,7 +49,8 @@ Sent every tot seconds in broadcast: let other nodes know me and my path length,
 {
   "handle" : "hello/hello_risp",
   "ip" : "my ip",
-  "path" : "length path of the source"
+  "path" : "length path of the source",
+  "ssid" : "ssid of the AP"
 }
 
 ### ACK
@@ -45,6 +58,7 @@ Used to notify the reception of a message/operation, and to confirm the outcome 
 
 {
   "handle" : "ack",
+  "ip" : "ip_source",
   "type" : "true/false"
 }
 
@@ -54,7 +68,7 @@ Used to send a message from the sink to any other node in the network, specifyin
 {
   "handle" : "forward_children",
   "path" : ["ip1", "ip2", "ip3"],
-  "data" : /* generic json message */
+  "data" : /* generic message */
 }
 
 ### FORWARD_PARENT
@@ -62,7 +76,17 @@ Used to send data from a generic node to the sink; every intermediate node will 
 
 {
   "handle" : "forward_parent",
-  "data" : /* generic json message */
+  "data" : /* generic message */
+}
+
+### NETWORK_CHANGED
+Used to inform the sink that a change has occured in the network (a new node joined the network or one is dead or changed parent).
+
+{
+  "handle" : "network_changed",
+  "operation" : "new_child/removed_child",
+  "ip_child" : "ip1",
+  "ip_parent" : "ip2"
 }
 
 ### CHANGE_PARENT
