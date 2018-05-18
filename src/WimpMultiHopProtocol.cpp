@@ -40,13 +40,18 @@ node_info children[MAX_CHILDREN];
 node_info neighbours[MAX_NEIGHBOURS];   //dovrebbe essere ordinato per path_length e power signal!
 
 char buffer[LEN_BUFFER][LEN_PACKET];  //keep list of incoming messages (circular)
-bool wait_for_ack = false, positive_ack = false, message_waiting = false, parent_answer = false;
+bool positive_ack = false, message_waiting = false, parent_answer = false;
+char* wait_for_ack = NULL;
 uint8_t first_message = 0, last_message = 0, path_length = MAX_PATH_LENGTH, num_children = 0, num_neighbours = 0;
 char ssid_name[10];
-const char* ssid = "WIMP_";
-const char* password = "7settete7&IPA";
-
 uint32_t test_id = 0;
+const char* ssid = "IPA";
+const char* password = "sett7ete";
+
+uint32_t unique_id = 7; //FIXME: dovrà essere l'arduino a darmi questo id (o direttamente io?) e verrà usato da raspy per deploy e collegamento id-ip
+
+//const char* ssid = "WIMP_";
+//const char* password = "7settete7&IPA";
 
 //const char* ssid = "FRITZ";
 //const char* password = "HirmerDiGuardoAmicoFRITZ";
@@ -148,20 +153,31 @@ if (flag) {
 
 /// Parse a received ack and sets global variables
 /// \param root json received
-void read_ack(JsonObject& root) {
+void read_ack(JsonObject& root, char* data) {
     //TODO: credo di poter fare anche direttamente con bool
-    const char* result = root["type"];
 
-    positive_ack = strcmp(result, "true") == 0;
+    const char* source = root["ip_source"];
+    if (strcmp(source, wait_for_ack) == 0) {
+        const char* result = root["type"];
+
+        positive_ack = strcmp(result, "true") == 0;
 
 #if debug
-    if (positive_ack) {
-        Serial.printf("Read a positive ack\n");
-    } else {
-        Serial.printf("Read a negative ack\n");
-    }
+        if (positive_ack) {
+            Serial.printf("Read a positive ack\n");
+        } else {
+            Serial.printf("Read a negative ack\n");
+        }
 #endif
-    wait_for_ack = false;
+        wait_for_ack = nullptr;
+    } else {
+#if debug
+Serial.printf("Received an ack that is not for me, forward to destination (parent)");
+#endif
+        udp_send(parent.ip, PORT, data);
+    }
+
+
 }
 
 
@@ -178,11 +194,14 @@ void read_hello(JsonObject& root) {
     int i=s.length()-2, j=3;
     int acc = 1;
     for (int k=0; k<4; ++k) {
-        b[i] = 0;
+        b[k] = 0;
     }
 
 	while (i > 0) {
-        b[j] += (s[i]-48)*acc;
+        b[j] += (s[i]-'0')*acc;
+#if debug
+        Serial.printf("s[%d] = %c \t b[%d] = %d\n", i, s[i], j, b[j]);
+#endif
         acc *= 10;
         i--;
         if (i >= 0 && s[i] == '.') {
@@ -191,7 +210,6 @@ void read_hello(JsonObject& root) {
             j--;
         }
 	}
-    b[3]++; //FIXME
 	IPAddress other(b[0], b[1], b[2], b[3]);
 
     other_path = root["path"];
@@ -241,7 +259,7 @@ Serial.printf("IP: %s\n PATH: %d\nNum_neighbours: %d\n", other.toString().c_str(
 #endif
                 if (num_neighbours < MAX_NEIGHBOURS) {
                     //add the new neighbour it
-                    char* sn;   //TODO:CHECK
+                    char sn[20];   //TODO:CHECK
                     root["ssid"].printTo(sn);
                     neighbours[num_neighbours] = node_info { other, sn, -75, other_path, 0 };
                     num_neighbours++;
@@ -273,8 +291,8 @@ root.prettyPrintTo(Serial);
         //I am the destination
         //read message and deliver
         const char* data = root["data"];
-        //size_t len_packet = strlen(data); //forse questo è più affidabile...
-        size_t len_packet = root["data"].measureLength();  //TODO: check
+        size_t len_packet = strlen(data); //forse questo è più affidabile...
+        //size_t len_packet = root["data"].measureLength();
 
         for (int i=0; i<len_packet; ++i) {
             buffer[last_message][i] = data[i];
@@ -289,7 +307,6 @@ Serial.printf("Read a forward children directed to me (my_ip: %s):\n", my_ip.toS
 Serial.printf("DATA: %s\n", data);
 #endif
 
-        //TODO: dovrei mandare ack al parent?
         return len_packet;
     } else {
         String next = ip_path[0];   //first hop
@@ -410,7 +427,8 @@ Serial.println("Sending ack to the new child");
         char data[LEN_PACKET];
         risp.printTo(data);
 
-        WIMP::send(data);
+        //WIMP::send(data);
+        udp_send(parent.ip, PORT, data);    //la send mi wrappa il forward children
 #if debug
 Serial.printf("Sent change in the net to the raspy\n");
 #endif
@@ -450,37 +468,39 @@ Serial.printf("Error! not my child\n");
     
     //inform sink
     JsonObject& obj = json_buffer.createObject();
-    obj["type"] = "network_changed";
+    obj["handle"] = "network_changed";
     obj["operation"] = "removed_child";
     obj["ip_child"] = ip.toString().c_str();
+    obj["ip_parent"] = parent.ip.toString().c_str();
     char data[LEN_PACKET];
     obj.printTo(data);
 
 #if debug
 Serial.printf("Read a leave parent (my_ip: %s):\n", my_ip.toString().c_str());
-Serial.printf("Accepted, inform raspi\n");
+Serial.printf("Accepted, inform raspy\n");
 #endif
 
-    WIMP::send(data);
+    //WIMP::send(data);
+    udp_send(parent.ip, PORT, data);    //la send mi wrappa il forward children
 }
 
 
 /// Deliver an old received packet to the application
 /// \return an old received packet or NULL if there is nothing
-//char* WIMP::retrieve_packet() {
-//    //TODO: potrebbe non servire!
-//    if (message_waiting) {
-//        char* msg = buffer[first_message];
-//        first_message++;
-//        first_message = (first_message % 10);
-//        if (first_message == last_message) {
-//            message_waiting = false;
-//        }
-//        return msg;
-//    } else {
-//        return NULL;
-//    }
-//}
+char* retrieve_packet() {
+    //TODO: potrebbe non servire!
+    if (message_waiting) {
+        char* msg = buffer[first_message];
+        first_message++;
+        first_message = (uint8_t) (first_message % 10);
+        if (first_message == last_message) {
+            message_waiting = false;
+        }
+        return msg;
+    } else {
+        return nullptr;
+    }
+}
 
 
 /// Sends to all the reachable nodes info on my self
@@ -495,6 +515,7 @@ void hello(IPAddress const& dest, const char* type) {
     ans["path"] = path_length;
     ans["ssid"] = ssid_name;
     ans["test_id"] = test_id;
+    ans["unique_id"] = unique_id;
     test_id++;
     ans.printTo(msg);
 
@@ -508,21 +529,20 @@ Serial.printf("Data: %s\n", msg);
 }
 
 
-/// Look for new udp packet incoming and checks the type of the packets
-/// \param data buffer in which write the received message for the application (if any)
-/// \return the number of bytes read, 0 if the messages were of management, -1 if errors
-int WIMP::read(char* data) {
-
+/// Implements actual udp read
+/// \param data buffer where to store received data
+/// \return length of the received data, 0 if no data for application, -1 if error
+int private_read(char* data) {
     int packet_size = udp.parsePacket();
     int i = 0;
 
 #if debug
-    Serial.printf("Waiting for arriving packet ... \n");
+Serial.printf("Waiting for arriving packet ... \n");
 #endif
 
     while (!packet_size && i < 20) {
 #if debug
-        Serial.printf(".");
+Serial.printf(".");
 #endif
         delay(250);
         i++;
@@ -532,30 +552,30 @@ int WIMP::read(char* data) {
     if (packet_size <= 0) {
         //no packet arrived
 #if debug
-        Serial.println(" No new packet!");
+Serial.println(" No new packet!");
 #endif
         return 0;
     }
 
     //there is a packet
 #if debug
-    Serial.printf("Received packet: %d byte from %s ip, port %d\n", 
-                    packet_size, 
-                    udp.remoteIP().toString().c_str(), 
-                    udp.remotePort());
+Serial.printf("Received packet: %d byte from %s ip, port %d\n",
+              packet_size,
+              udp.remoteIP().toString().c_str(),
+              udp.remotePort());
 #endif
 
     int len_packet = udp.read(data, LEN_PACKET);
 
 #if debug
-    Serial.printf("packet_size (from parse_packet): %d\nlen_packet (from actual read): %d\n", packet_size, len_packet);
+Serial.printf("packet_size (from parse_packet): %d\nlen_packet (from actual read): %d\n", packet_size, len_packet);
 #endif
 
     if (len_packet > 0 && len_packet < LEN_PACKET) {
         //non so se serve...
         data[len_packet] = '\0';
     }
-    
+
     JsonObject& root = json_buffer.parseObject(data);
 
     if (!root.success()) {
@@ -608,7 +628,7 @@ Serial.println("Parsing a LEAVE message");
 #endif
         read_leave(root);
         json_buffer.clear();
-        return 0;            
+        return 0;
     }
 
     if (strcmp(handle, "forward_children") == 0) {
@@ -629,11 +649,20 @@ Serial.println("Parsing a FORWARD_PARENT message");
         return 0;
     }
 
+    if (strcmp(handle, "network_changed") == 0) {
+#if debug
+Serial.println("Parsing a NETWORK_CHANGED message");
+#endif
+        read_forward_parent(data);  //they have to do the same thing
+        json_buffer.clear();
+        return 0;
+    }
+
     if (strcmp(handle, "ack") == 0) {
 #if debug
 Serial.println("Parsing a ACK message");
 #endif
-        read_ack(root);
+        read_ack(root, data);
         json_buffer.clear();
         return 0;
     }
@@ -645,8 +674,19 @@ Serial.println("Qualquadra non cosa...");
     return -1;
 }
 
+/// Look for new udp packet incoming and checks the type of the packets
+/// \param data buffer in which write the received message for the application (if any)
+/// \return the number of bytes read, 0 if the messages were of management, -1 if errors
+int WIMP::read(char* data) {
+    if (message_waiting) {
+        data = retrieve_packet();
+        return (data == nullptr ? 0 : (int) strlen(data));
+    } else {
+        return private_read(data);
+    }
+}
 
-//TODO: dovrà essere l'applicazione a fare il controllo degli ack! -> forse non serve
+
 /// Sends data to sink (and only to sink!)
 /// \param data message to be sent to the sink
 void WIMP::send(char* data) {
@@ -767,7 +807,7 @@ Serial.printf("Data: %s\n", data);
 #endif
 
     udp_send(new_parent, PORT, data);
-    wait_for_ack = true;
+    wait_for_ack = (char*) new_parent.toString().c_str();
 
     //se faccio delay non verrà mai chiamata la read... devo chiamarla io
     positive_ack = false;
@@ -778,7 +818,8 @@ Serial.printf("Waiting for ack (my_ip: %s)\n", my_ip.toString().c_str());
 
     delay(1000);
 
-    WIMP::read(data);
+    //WIMP::read(data);
+    private_read(data);
     //se è false, dovrà essere chiamata di nuovo con un new parent
 
 #if debug
@@ -850,9 +891,11 @@ Serial.printf("Connected to: %s\n", neighbours[i].ssid.c_str());
 #if debug
 Serial.println("Sending a change parent");
 #endif
+            //TEST: TODO: cambia
+            //neighbours[i].ip = IPAddress(192, 168, 43, 114);
             if (change_parent(neighbours[i].ip, my_ip)) {
                 //change went ok
-                parent = node_info { neighbours[i].ip, neighbours[i].ssid, neighbours[i].rssi, neighbours[i].len_path, 0 };
+                parent = node_info { neighbours[i].ip, neighbours[i].ssid, neighbours[i].rssi, (uint8_t) (neighbours[i].len_path+1), 0 };
                 hello(parent.ip, "hello");
                 connected = true;
 #if debug
@@ -1040,7 +1083,7 @@ Serial.printf("Data: %s\n", data);
 
     udp_send(parent.ip, PORT, data);
 
-    wait_for_ack = true;
+    wait_for_ack = (char*) parent.ip.toString().c_str();
     positive_ack = false;
 
     delay(1000);

@@ -170,13 +170,18 @@ std::cout << "Received message: " << incoming_message << std::endl;
 std::cout << "Parsing a HELLO message" << std::endl;
 #endif
         //answer with an hello, let the others know you are the sink
-        const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0"})";
+        const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0","unique_id"=0})";
         std::string dest = doc["ip"].get<std::string>();
+        uint32_t id = doc["unique_id"].get<int32_t>();
 
         if (doc.find("ip") == doc.end()) {
             std::cerr << "Error in parsing hello, dest=NULL" << std::endl;
             return -1;
         }
+
+        //add connection id-ip
+        id_ip[id] = dest.c_str();
+        ip_id[dest.c_str()] = id;
 
         send_direct(dest.c_str(), hello_risp);
         return 0;   //no message for application
@@ -261,69 +266,62 @@ std::cout << "Parsing a FORWARD_CHILDREN message (discarded)" << std::endl;
         return 0;   
     }
 
+    if (handle == "network_changed") {
+#if debug
+std::cout << "Parsing a NETWORK_CHANGED message" << std::endl;
+#endif
+        if (doc.find("operation") == doc.end()) {
+            std::cerr << "Error in parsing network_changed, operation=NULL" << std::endl;
+            return -1;
+        }
+        if (doc.find("ip_child") == doc.end()) {
+            std::cerr << "Error in parsing network_changed, ip_child=NULL" << std::endl;
+            return -1;
+        }
+        if (doc.find("ip_parent") == doc.end()) {
+            std::cerr << "Error in parsing network_changed, ip_parent=NULL" << std::endl;
+            return -1;
+        }
+
+        std::string op = doc["operation"].get<std::string>();
+        std::string child = doc["ip_child"].get<std::string>();
+        std::string parent = doc["ip_parent"].get<std::string>();
+
+        if (op == "new_child") {
+            WIMP::change_route(parent.c_str(), child.c_str());
+            return 0;
+        }
+        if (op == "removed_child") {
+            WIMP::remove_route(parent.c_str(), child.c_str());
+            return 0;
+        }
+#if debug
+std::cerr << "Unexpected error in parsing network_changed" << std::endl;
+#endif
+        return -1;
+
+    }
+
     if (handle == "forward_parent") {
 #if debug
 std::cout << "Parsing a FORWARD_PARENT message" << std::endl;
 #endif
-        //I am the destination, message for application
-        json data_value = doc["data"];
 
         if (doc.find("data") == doc.end()) {
             std::cerr << "Error in parsing forward_parent, data=NULL" << std::endl;
             return -1;
         }
 
-        auto t = data_value.dump();
-
-        memccpy(data, t.c_str(), '\0', data_value.size());
+        //I am the destination, message for application
+        //json data_value = doc["data"];
+        std::string data_value = doc["data"].get<std::string>();
 
 #if debug
 std::cout << "Data: " << data << std::endl;
 #endif
-
-        std::string type = data_value["type"].get<std::string>();
-
-        if (data_value.find("type") == data_value.end()) {
-            std::cerr << "Error in parsing forward_parent, type=NULL" << std::endl;
-            return -1;
-        }
-
-        if (type == "network_changed") {
-            //it's management
-            std::string op = data_value["operation"].get<std::string>();
-            std::string child = data_value["ip_child"].get<std::string>();
-            std::string parent = data_value["ip_parent"].get<std::string>();
-
-            if (data_value.find("operation") == data_value.end()) {
-                std::cerr << "Error in parsing forward_parent, op=NULL" << std::endl;
-                return -1;
-            }
-            if (data_value.find("ip_child") == data_value.end()) {
-                std::cerr << "Error in parsing forward_parent, child=NULL" << std::endl;
-                return -1;
-            }
-            if (data_value.find("ip_parent") == data_value.end()) {
-                std::cerr << "Error in parsing forward_parent, parent=NULL" << std::endl;
-                return -1;
-            }
-
-            if (op == "new_child") {
-                WIMP::change_route(parent.c_str(), child.c_str());
-                return 0;
-            }
-            if (op == "removed_child") {
-                WIMP::remove_route(parent.c_str(), child.c_str());
-                return 0;
-            }
-#if debug
-std::cerr << "Unexpected error in parsing forward_parent" << std::endl;
-#endif
-            return -1;
-        } else {
-            //for application
-            buffer.push(data);
-            return (int) strlen(data);
-        }
+        //for application
+        buffer.push(data);
+        return (int) strlen(data);
     }
 
     if (handle == "ack") {
@@ -387,6 +385,7 @@ std::cout << "Original message to be sent: " << data << std::endl;
     std::vector<const char*> path = get_path(dest);
 
     document["handle"] = "forward_children";
+    json j_vec;
 
     if (path.empty()) {
         if (strcmp(dest, "255.255.255.255") != 0) {
@@ -397,15 +396,16 @@ std::cout << "Original message to be sent: " << data << std::endl;
 #if debug
 std::cout << "Sending message in broadcast" << std::endl;
 #endif
-        document["path"] = "broadcast";
+        path.push_back("broadcast");
+        j_vec = path;
     } else {
 #if debug
 std::cout << "Sending message in unicast" << std::endl;
 #endif
-        json j_vec = path;
-        document["path"] = j_vec;
     }
 
+    j_vec = path;
+    document["path"] = j_vec;
     document["data"] = data;
 
     client.sin_family = AF_INET;
@@ -429,7 +429,9 @@ std::cout << document << std::endl;
                cli_len);
 
         //sleep(5);    //o 5? -> il thread read si occuperà del resto
-
+#if debug
+wait_for_ack = false;
+#endif
         _try++;
     }
 

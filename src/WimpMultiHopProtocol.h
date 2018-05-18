@@ -19,10 +19,6 @@ namespace WIMP {
     */
     void ack(IPAddress const& dest, bool flag);
 
-    /**
-     * 
-    */
-    char* retrieve_packet();
 
     /**
      * Send data to sink (and only to sink!)
