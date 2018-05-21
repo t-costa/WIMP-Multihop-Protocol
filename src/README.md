@@ -32,14 +32,6 @@ Modify read, with a public (called only by the application) and a private (calle
 
 The random generated number is not random.
 
-Serve testare la consistenza delle strutture dati interne.
-
-Forse (probabilmente) serve aggiungere un id/ipsource all'ack.
-
-Modifica per il network changed, sia in esp che in raspy (read_change, read_leave). -> ora i messaggi applicazione dovrebbero poter essere in qualsiasi formato!
-
-Credo manchi qualcosa nella creazione di children, mi sa che qualche campo resta non settato.
-
 ## Type of messages
 The following is a list of all the possible messages that can be exchanged by the ESP nodes and the sink, some of the messages might not be used in the final project (such as leave), due to lack of time.
 
