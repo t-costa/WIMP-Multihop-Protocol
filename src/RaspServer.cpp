@@ -11,6 +11,7 @@
 #include <algorithm>
 
 #include <nlohmann/json.hpp>
+#include <thread>
 
 #include "RaspServer.h"
 
@@ -34,7 +35,7 @@ struct sockaddr_in client;
 socklen_t cli_len = sizeof(client);
 char incoming_message[LEN_PACKET];
 std::queue<const char*> buffer;
-std::vector<std::string> children;
+std::vector<std::pair<std::string, int32_t>> children;
 int num_children = 0;
 bool wait_for_ack = false;
 
@@ -127,6 +128,20 @@ std::cout << "Sending a message to " << dest << " type:\n " << data << std::endl
 }
 
 
+int get_child(std::string child) {
+    bool found = false;
+    int i=0;
+    while (!found && i<num_children) {
+        if (children[i].first == child) {
+            found = true;
+        } else {
+            ++i;
+        }
+    }
+
+    return found ? i : -1;
+}
+
 //TODO: dovrai prendere l'ip in qualche modo!
 /// Reads an incoming message from a generic node
 /// \param data buffer in witch there will be written the received data (if any)
@@ -170,7 +185,7 @@ std::cout << "Received message: " << incoming_message << std::endl;
 std::cout << "Parsing a HELLO message" << std::endl;
 #endif
         //answer with an hello, let the others know you are the sink
-        const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0","unique_id"=0})";
+        const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0","unique_id":0})";
         std::string dest = doc["ip"].get<std::string>();
         uint32_t id = doc["unique_id"].get<int32_t>();
 
@@ -182,6 +197,18 @@ std::cout << "Parsing a HELLO message" << std::endl;
         //add connection id-ip
         id_ip[id] = dest.c_str();
         ip_id[dest.c_str()] = id;
+
+        //update liveness children
+        bool found = false;
+        int i = 0;
+        while (i < num_children && !found) {
+            if (children[i].first == dest) {
+                children[i].second = 0;
+                found = true;
+            } else {
+                ++i;
+            }
+        }
 
         send_direct(dest.c_str(), hello_risp);
         return 0;   //no message for application
@@ -207,21 +234,28 @@ std::cout << "Parsing a CHANGE message" << std::endl;
             return -1;
         }
 
+        if (get_child(source) != -1) {
+            //era già mio figlio, deve essergli successo qualcosa, povero cucciolo
+            const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
+            send_direct(source.c_str(), ack);
+            return 0;
+        }
+
         if (num_children >= MAX_CHILDREN) {
             //can't have more children
 #if debug
 std::cout << "Received a change request, but I have too many children!" << std::endl;
 #endif
             //send negative ack
-            const char* ack = R"({"handle":"ack","type":"false"})";
+            const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"false"})";
             send_direct(source.c_str(), ack);
             return 0;
         }
 
         WIMP::change_route("Sink", source.c_str());
-        children.push_back(source);
+        children.emplace_back(source, 0);
         num_children++;
-        const char* ack = R"({"handle":"ack","type":"true"})";
+        const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
         send_direct(source.c_str(), ack);
         return 0;
     }
@@ -240,7 +274,7 @@ std::cout << "Parsing a LEAVE message" << std::endl;
         //remove child
         auto i_remove = children.end();
         for (auto it = children.begin(); it != children.end(); it++) {
-            if (*it == source) {
+            if ((*it).first == source) {
                 i_remove = it;
             }
         }
@@ -253,7 +287,7 @@ std::cout << "Parsing a LEAVE message" << std::endl;
 std::cout << "Source leave: " << source << std::endl;
 #endif
 
-        const char* ack = R"({"handle":"ack","type":"true"})";
+        const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
         send_direct(source.c_str(), ack);
         return 0;            
     }
@@ -439,6 +473,55 @@ wait_for_ack = false;
 }
 
 
+/// Endless loop that checks if my children are alive, if not, it removes them
+void check_alive() {
+
+    //TODO: POSSONO ESSERCI PROBLEMI DI MULTITHREADING CON CHILDREN!
+
+    while (true) {
+        sleep(10);
+
+#if debug
+std::cout << "Started check_alive, incrementing counter" << std::endl;
+#endif
+
+        for (auto& c : children) {
+            c.second++;
+        }
+
+#if debug
+for (auto& c : children) {
+    std::cout << "ip: " << c.first << " \t counter: " << c.second << std::endl;
+}
+#endif
+
+        sleep(5);
+
+        bool found = true;
+        while (found) {
+            auto i_remove = children.end();
+            for (auto it = children.begin(); it != children.end(); it++) {
+                if ((*it).second > 5) {
+                    i_remove = it;
+                }
+            }
+            if (i_remove != children.end()) {
+#if debug
+std::cout << "removing " << (*i_remove).first << std::endl;
+#endif
+                routes.erase((*i_remove).first.c_str());    //remove route
+                children.erase(i_remove);
+                num_children--;
+            } else {
+                found = false;  //esco se li ho trovati tutti
+            }
+        }
+
+        sleep(10);
+    }
+}
+
+
 /// Initializes the data structures used by the library
 /// \return true iff the initialization has been completed without errors
 bool WIMP::initialize() {
@@ -472,5 +555,9 @@ std::cout << server.sin_port << std::endl;
 #if debug
 std::cout << "Bind done" << std::endl;
 #endif
+
+    std::thread aliveness(check_alive);
+    aliveness.detach();
+
     return true;
 }
