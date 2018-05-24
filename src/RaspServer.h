@@ -9,7 +9,7 @@ namespace WIMP {
     /**
      * Initializes structures for communication
     */
-    bool initialize();
+    bool initialize(const char* ip_address);
 
     /**
      * Shows the current connections between nodes (parent-children)
@@ -32,8 +32,16 @@ namespace WIMP {
     bool send(const char* data, const char* dest);
 
     /**
+     * Sends a message to the specific node, through its unique id
+     * @param data message to be sent
+     * @param dest id of destination
+     * @return true iff the message is correctly sent
+     */
+    bool send(const char* data, int dest);
+
+    /**
      * Reads an incoming message from a generic node
     */
-    int read(char* data);
+    int read(std::string data);
 
 }

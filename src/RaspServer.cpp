@@ -28,16 +28,21 @@ using json = nlohmann::json;
 std::unordered_map<const char*, const char*> routes;
 std::unordered_map<int32_t, const char*> id_ip;
 std::unordered_map<const char*, int32_t> ip_id;
+std::vector<std::pair<std::string, int32_t>> children;
+int num_children = 0;
+
 //initialize socket and structure
 int socket_info;
 struct sockaddr_in server;
 struct sockaddr_in client;
 socklen_t cli_len = sizeof(client);
+char my_ip[20];
+
+//data for incoming messages
 char incoming_message[LEN_PACKET];
-std::queue<const char*> buffer;
-std::vector<std::pair<std::string, int32_t>> children;
-int num_children = 0;
+//std::queue<const char*> buffer;
 bool wait_for_ack = false;
+std::string ip_to_ack;
 
 
 /// Shows the current connections between nodes (parent-children)
@@ -52,11 +57,21 @@ void WIMP::show_routes() {
         auto p = c_p.second;
         //parents.push_back(child);
         parents.push_back(p);
-
-        while (strcmp(p, "Sink") != 0) {
-            p = routes[p];  //is the child of someone
-            parents.push_back(p);   //add other step of the path
+        bool error = false;
+        while (!error && strcmp(p, "Sink") != 0) {
+            if (routes.find(p) == routes.end()) {
+                //there is something wrong with the path...
+                error = true;
+            } else {
+                p = routes[p];  //is the child of someone
+                parents.push_back(p);   //add other step of the path
+            }
         }
+
+        if (error) {
+            std::cout << "Error building the path of " << child << "... These are partial results:" << std::endl;
+        }
+
         std::reverse(parents.begin(), parents.end());
         for (auto par : parents) {
             std::cout << par << " -> ";
@@ -66,7 +81,7 @@ void WIMP::show_routes() {
 }
 
 
-/// Changes a route (change of parent or children) or adds a new route
+/// Changes a route new child for a known parent or a new parent for a known child
 /// \param parent parent of the new child
 /// \param child new child arrived, or child that is changing parents
 void WIMP::change_route(const char* parent, const char* child) {
@@ -101,9 +116,21 @@ WIMP::show_routes();
 /// \param child child that is changing the parent
 void WIMP::remove_route(const char* parent, const char* child) {
     if (routes.find(child) == routes.end() || routes[child] != parent) {
+#if debug
+std::cout << "o non c'è child, o ha un parent diverso, in ogni caso non faccio niente..." << std::endl;
+WIMP::show_routes();
+#endif
         return; //ok, no info
     }
     routes.erase(child);
+#if debug
+std::cout << "Removed child " << child << std::endl;
+WIMP::show_routes();
+#endif
+    //it is possible that now others node are not reachable...
+    //I don't change the others, in this way when the network recovers
+    //itself is easy to change stuff
+    //TODO: should inform cloud! (malfunctioning?)
 }
 
 
@@ -128,9 +155,13 @@ std::cout << "Sending a message to " << dest << " type:\n " << data << std::endl
 }
 
 
-int get_child(std::string child) {
+/// Finds the position of the wanted child in children
+/// \param child child we are looking for
+/// \return index of the child if found, -1 otherwise
+int get_child(std::string const& child) {
     bool found = false;
     int i=0;
+
     while (!found && i<num_children) {
         if (children[i].first == child) {
             found = true;
@@ -142,11 +173,11 @@ int get_child(std::string child) {
     return found ? i : -1;
 }
 
-//TODO: dovrai prendere l'ip in qualche modo!
+
 /// Reads an incoming message from a generic node
 /// \param data buffer in witch there will be written the received data (if any)
 /// \return number of bytes read, 0 if none for the application, -1 if an error occurred
-int WIMP::read(char* data) {
+int WIMP::read(std::string data) {
 
     ssize_t rec_len;
     rec_len = recvfrom(socket_info, (char *) incoming_message, LEN_PACKET, MSG_WAITALL, (struct sockaddr *) &client, &cli_len);
@@ -169,30 +200,43 @@ std::cout << "Received message: " << incoming_message << std::endl;
     try {
         doc = json::parse(incoming_message);
     } catch  (json::parse_error &e) {
-        std::cerr << "Error in parsing!" << std::endl;
+        std::cerr << "Error in parsing json!" << std::endl;
         return -1;
     }
-
-    std::string handle = doc["handle"].get<std::string>();
 
     if (doc.find("handle") == doc.end()) {
         std::cerr << "Parsing error handle=NULL" << std::endl;
         return -1;
     }
 
+    std::string handle = doc["handle"].get<std::string>();
+
     if (handle == "hello") {
 #if debug
 std::cout << "Parsing a HELLO message" << std::endl;
 #endif
         //answer with an hello, let the others know you are the sink
-        const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0","unique_id":0})";
-        std::string dest = doc["ip"].get<std::string>();
-        uint32_t id = doc["unique_id"].get<int32_t>();
+        json hello_doc;
+        hello_doc["handle"] = "hellp_risp";
+        hello_doc["ip"] = my_ip;
+        hello_doc["path"] = 0;
+        hello_doc["ssid"] = "WIMP_0";
+        hello_doc["unique_id"] = 0;
+        const char* hello_risp = hello_doc.dump().c_str();
+        //const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0","unique_id":0})";
 
         if (doc.find("ip") == doc.end()) {
             std::cerr << "Error in parsing hello, dest=NULL" << std::endl;
             return -1;
         }
+
+        if (doc.find("unique_id") == doc.end()) {
+            std::cerr << "Error in parsing hello, id=NULL" << std::endl;
+            return -1;
+        }
+
+        std::string dest = doc["ip"].get<std::string>();
+        uint32_t id = doc["unique_id"].get<int32_t>();
 
         //add connection id-ip
         id_ip[id] = dest.c_str();
@@ -227,16 +271,22 @@ std::cout << "Parsing a HELLO_RISP message (discarded)" << std::endl;
 std::cout << "Parsing a CHANGE message" << std::endl;
 #endif
         //someone wants me as parent
-        std::string source = doc["ip_source"].get<std::string>();
         //const Value& old = doc["ip_old_parent"];
         if (doc.find("ip_source") == doc.end()) {
             std::cerr << "Error in parsing change, source=NULL" << std::endl;
             return -1;
         }
 
+        std::string source = doc["ip_source"].get<std::string>();
+
         if (get_child(source) != -1) {
             //era già mio figlio, deve essergli successo qualcosa, povero cucciolo
-            const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
+            //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
+            json ack_doc;
+            ack_doc["handle"] = "ack";
+            ack_doc["ip_source"] = my_ip;
+            ack_doc["type"] = false;
+            const char* ack = ack_doc.dump().c_str();
             send_direct(source.c_str(), ack);
             return 0;
         }
@@ -247,7 +297,12 @@ std::cout << "Parsing a CHANGE message" << std::endl;
 std::cout << "Received a change request, but I have too many children!" << std::endl;
 #endif
             //send negative ack
-            const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"false"})";
+            json ack_doc;
+            ack_doc["handle"] = "ack";
+            ack_doc["ip_source"] = my_ip;
+            ack_doc["type"] = false;
+            const char* ack = ack_doc.dump().c_str();
+            //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"false"})";
             send_direct(source.c_str(), ack);
             return 0;
         }
@@ -255,7 +310,13 @@ std::cout << "Received a change request, but I have too many children!" << std::
         WIMP::change_route("Sink", source.c_str());
         children.emplace_back(source, 0);
         num_children++;
-        const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
+
+        json ack_doc;
+        ack_doc["handle"] = "ack";
+        ack_doc["ip_source"] = my_ip;
+        ack_doc["type"] = true;
+        const char* ack = ack_doc.dump().c_str();
+        //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
         send_direct(source.c_str(), ack);
         return 0;
     }
@@ -265,11 +326,12 @@ std::cout << "Received a change request, but I have too many children!" << std::
 std::cout << "Parsing a LEAVE message" << std::endl;
 #endif
         //someone wants to leave me (really??)
-        std::string source = doc["ip_source"].get<std::string>();
         if (doc.find("ip_source") == doc.end()) {
             std::cerr << "Error in parsing leave, source=NULL" << std::endl;
             return -1;
         }
+        std::string source = doc["ip_source"].get<std::string>();
+
         routes.erase(source.c_str());
         //remove child
         auto i_remove = children.end();
@@ -286,8 +348,13 @@ std::cout << "Parsing a LEAVE message" << std::endl;
 #if debug
 std::cout << "Source leave: " << source << std::endl;
 #endif
+        json ack_doc;
+        ack_doc["handle"] = "ack";
+        ack_doc["ip_source"] = my_ip;
+        ack_doc["type"] = true;
+        //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
+        const char* ack = ack_doc.dump().c_str();
 
-        const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
         send_direct(source.c_str(), ack);
         return 0;            
     }
@@ -348,25 +415,48 @@ std::cout << "Parsing a FORWARD_PARENT message" << std::endl;
 
         //I am the destination, message for application
         //json data_value = doc["data"];
-        std::string data_value = doc["data"].get<std::string>();
-
+        json data_value = doc["data"];
+        //data = doc["data"].get<std::string>();
+        data = data_value.dump();
 #if debug
 std::cout << "Data: " << data << std::endl;
 #endif
         //for application
-        buffer.push(data);
-        return (int) strlen(data);
+        //buffer.push(data);
+        return (int) data.length();
     }
 
     if (handle == "ack") {
 #if debug
 std::cout << "Parsing a ACK message" << std::endl;
 #endif
-        //TODO: per ora non uso ack positivo/negativo
 
         //bool type = doc["type"].get<bool>();
 
-        wait_for_ack = false;
+        if (doc.find("ip_source") == doc.end()) {
+            std::cerr << "Error in parsing ack message, ip_source=NULL" << std::endl;
+            return -1;
+        }
+        if (doc.find("type") == doc.end()) {
+            std::cerr << "Error in parsing ack message, type=NULL" << std::endl;
+            return -1;
+        }
+
+        bool type = doc["type"].get<bool>();
+        std::string source = doc["ip_source"].get<std::string>();
+
+#if debug
+if (type) {
+    std::cout << "Received positive ack ";
+} else {
+    std::cout << "Received negative ack ";
+}
+std::cout << " from " << source << std::endl;
+#endif
+
+        if (type && source == ip_to_ack) {
+            wait_for_ack = false;
+        }
 
         return 0;
     }
@@ -378,21 +468,37 @@ std::cerr << "qualquadra non cosa" << std::endl;
     return -1;
 }
 
+
 /// Computes the (unique) path from the sink to a destination node
 /// \param dest destination node for witch we want to know the path
 /// \return vector with all the ordered hops that the packet has to do in
-/// order to reach the destination
+/// order to reach the destination, empty vector if error
 std::vector<const char*> get_path(const char* dest) {
     std::vector<const char*> path;
 
     if (routes.find(dest) == routes.end()) {
+#if debug
+std::cout << "dest not found, returning empty" << std::endl;
+#endif
         return path;
     }
 
     const char* p = routes[dest];
-    while (!strcmp(p, "Sink")) {
-        path.push_back(p);
-        p = routes[p];
+    bool error = false;
+
+    while (!error && strcmp(p, "Sink") != 0) {
+        if (routes.find(p) == routes.end()) {
+            error = true;
+        } else {
+            path.push_back(p);
+            p = routes[p];
+        }
+    }
+
+    if (error) {
+        std::cerr << "the destination is not reachable" << std::endl;
+        path.clear();
+        return path;
     }
 
     std::reverse(path.begin(), path.end());
@@ -407,9 +513,8 @@ std::vector<const char*> get_path(const char* dest) {
 /// \return true iff the node has been correctly sent and received by the destination
 bool WIMP::send(const char* data, const char* dest) {
 
-    //devo costruire il json con forward children e
-    //il path che deve fare il messaggo
-    // document is the root of a json message
+    //build json with forward_children and path
+    //document is the root of a json message
     json document;
 
 #if debug
@@ -422,8 +527,10 @@ std::cout << "Original message to be sent: " << data << std::endl;
     json j_vec;
 
     if (path.empty()) {
+        //TODO: dovrebbero esserci funzioni per vedere se un
+        //TODO: dato ip è un indirizzo di broadcast...
         if (strcmp(dest, "255.255.255.255") != 0) {
-            std::cerr << "Error in searching the path, dest not found" << std::endl;
+            std::cerr << "Error in searching the path, dest not found and not broadcast" << std::endl;
             return false;
         }
         //send in broadcast
@@ -436,9 +543,9 @@ std::cout << "Sending message in broadcast" << std::endl;
 #if debug
 std::cout << "Sending message in unicast" << std::endl;
 #endif
+        j_vec = path;
     }
 
-    j_vec = path;
     document["path"] = j_vec;
     document["data"] = data;
 
@@ -447,36 +554,55 @@ std::cout << "Sending message in unicast" << std::endl;
     //inet_pton(AF_INET, dest, &(client.sin_addr.s_addr));
     client.sin_port = htons(PORT);
 
-#if debug
-std::cout << client.sin_addr.s_addr << std::endl;
-std::cout << client.sin_port << std::endl;
-std::cout << document << std::endl;
-#endif
-
     const char* payload = document.dump().c_str();
 
+
+#if debug
+std::cout << "Message to be sent (json object): " << document << std::endl;
+std::cout << "Message to be sent (actual message): " << payload << std::endl;
+#endif
+
     wait_for_ack = true;
+    ip_to_ack = dest;   //TODO: check
+
+#if debug
+std::cout << "dest: " << dest << std::endl;
+std::cout << "ip_to_ack: " << ip_to_ack << std::endl;
+#endif
+
     int _try = 0;
+    //TODO: per ora la send è singola, quindi aspetto un ack da un solo ip
     while (wait_for_ack && _try < 5) {
         sendto(socket_info, payload, strlen(data),
                MSG_CONFIRM, (const struct sockaddr *) &client,
                cli_len);
 
-        //sleep(5);    //o 5? -> il thread read si occuperà del resto
-#if debug
-wait_for_ack = false;
-#endif
+        sleep(3);    //the read thread will change stuff
+
         _try++;
     }
 
     return !wait_for_ack;
 }
 
+bool WIMP::send(const char *data, int dest) {
 
+    if (id_ip.find(dest) == id_ip.end()) {
+#if debug
+std::cerr << "Destination" << dest << " not found!" << std::endl;
+#endif
+        return false;
+    }
+
+    const char* ip = id_ip[dest];
+
+    return WIMP::send(data, ip);
+}
+
+
+//TODO: POSSONO ESSERCI PROBLEMI DI MULTITHREADING CON CHILDREN!
 /// Endless loop that checks if my children are alive, if not, it removes them
 void check_alive() {
-
-    //TODO: POSSONO ESSERCI PROBLEMI DI MULTITHREADING CON CHILDREN!
 
     while (true) {
         sleep(10);
@@ -518,13 +644,34 @@ std::cout << "removing " << (*i_remove).first << std::endl;
         }
 
         sleep(10);
+
+        //giusto per non avere la chiazza gialla del loop che non termina...
+        if (num_children > MAX_CHILDREN) {
+#if debug
+std::cout << "qualcosa di impossibile è appena successa..." << std::endl;
+#endif
+            break;
+        }
     }
 }
 
 
 /// Initializes the data structures used by the library
 /// \return true iff the initialization has been completed without errors
-bool WIMP::initialize() {
+bool WIMP::initialize(const char* ip) {
+
+    struct sockaddr_in sa;
+    if (inet_pton(AF_INET, ip, &(sa.sin_addr)) <= 0) {
+        std::cerr << "Invalid ip address" << std::endl;
+        return false;
+    }
+
+    size_t ip_len = strlen(ip);
+    for (size_t i=0; i<ip_len; ++i) {
+        my_ip[i] = ip[i];
+    }
+    my_ip[ip_len] = '\0';
+
     socket_info = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (socket_info == -1) {
         std::cerr << "Could not create socket" << std::endl;
@@ -554,6 +701,7 @@ std::cout << server.sin_port << std::endl;
     }
 #if debug
 std::cout << "Bind done" << std::endl;
+std::cout << "Starting child management thread..." << std::endl;
 #endif
 
     std::thread aliveness(check_alive);
