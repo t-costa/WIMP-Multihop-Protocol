@@ -177,7 +177,7 @@ int get_child(std::string const& child) {
 /// Reads an incoming message from a generic node
 /// \param data buffer in witch there will be written the received data (if any)
 /// \return number of bytes read, 0 if none for the application, -1 if an error occurred
-int WIMP::read(std::string data) {
+int WIMP::read(char* data) {
 
     ssize_t rec_len;
     rec_len = recvfrom(socket_info, (char *) incoming_message, LEN_PACKET, MSG_WAITALL, (struct sockaddr *) &client, &cli_len);
@@ -414,16 +414,18 @@ std::cout << "Parsing a FORWARD_PARENT message" << std::endl;
         }
 
         //I am the destination, message for application
-        //json data_value = doc["data"];
         json data_value = doc["data"];
         //data = doc["data"].get<std::string>();
-        data = data_value.dump();
+        const char* msg = data_value.dump().c_str();
+        for (int i=0; i<strlen(msg); ++i) {
+            data[i] = msg[i];
+        }
 #if debug
 std::cout << "Data: " << data << std::endl;
 #endif
         //for application
         //buffer.push(data);
-        return (int) data.length();
+        return (int) strlen(data);
     }
 
     if (handle == "ack") {
