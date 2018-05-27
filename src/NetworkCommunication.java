@@ -2,46 +2,29 @@
 public interface NetworkCommunication {
 
     /**
-     * Initializes udp socket data structure
+     * Initializes the socket udp, sends first hello in broadcast, waits for answers
+     * in a new thread, finds the first parent of the node and starts the managing thread
      * @param port port number for binding
-     * @return true iff everything goes ok
+     * @return true iff the initialization went ok and the application found a parent
      */
     boolean udpInitialize(int port);
 
     /**
-     * Initializes tcp socket data structure
-     * @param port port number for binding
-     * @param det IP address of destination
-     * @return true iff everything goes ok
-     */
-    boolean tcpInitialize(int port, String det);
-
-    /**
-     * Sends a message to another IP through udp socket (only to parent)
+     * Sends a message to the Sink of the net, wrapping it
+     * in a forward_parent message
      * @param data message to be sent
-     * @return true iff the send goes ok
+     * @return true iff the message is correctly sent and acked
      */
     boolean udpSend(String data);
 
     /**
-     * Sends a message to the connected IP through TCP
-     * @param data message to be sent
-     * @return true iff the send goes ok
-     */
-    boolean tcpSend(String data);
-
-    /**
-     * Receives a message through the udp socket (blocking)
+     * Blocks a thread until it receives a new UDP message,
+     * discards useless/malformed messages, parse them and calls
+     * the appropriate methods
      * @param buffer buffer where to store the received ip
-     * @return length of the received packet, -1 if error, 0 if managing packet
+     * @return The length of the received message if for the application,
+     * 0 if it is a message of the protocol
+     * -1 if an error occurs
      */
     int udpReceive(byte[] buffer);
-
-    /**
-     * Receives a message through the tcp socket (blocking)
-     * @param buffer string where to write the received message
-     * @return length of the message received, -1 if error
-     */
-    int tcpReceive(String buffer);
-
 }
