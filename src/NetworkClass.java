@@ -71,16 +71,13 @@ public class NetworkClass implements NetworkCommunication {
             return false;
         }
 
-        System.out.println("TEST: mio indirizzo: " + udpSocket.getLocalAddress().toString());
-        System.out.println("TEST: mia porta: " + udpSocket.getLocalPort());
-
         send_hello("hello", "255.255.255.255");
 
         Thread initializer = new Thread(() -> {
             byte[] data = new byte[512];
             try {
                 while (true) {
-                    System.out.println("Waiting messages,,,");
+                    System.out.println("Waiting messages...");
                     udpReceive(data);
                     if (udpSocket.isClosed())
                         return;
@@ -114,7 +111,7 @@ public class NetworkClass implements NetworkCommunication {
         change_parent();
 
         if (!positive_ack.get()) {
-            System.out.println("Errore in inizializzazione, non ho trovato un parent!");
+            System.out.println("Error in initialization! Cannot find a parent!");
             return false;
         }
 
@@ -122,7 +119,6 @@ public class NetworkClass implements NetworkCommunication {
             while (true) {
                 try {
                     Thread.sleep(30000);
-                    //parent_answer = false;
                     parent_answer.set(false);
                     System.out.println("Sending hello in broadcast!");
                     send_hello("hello", "255.255.255.255");
@@ -170,8 +166,7 @@ public class NetworkClass implements NetworkCommunication {
     @Override
     public boolean udpSend(String data) {
 
-        System.out.println("TEST: messaggio da inviare: " + data);
-        System.out.println("TEST: indirizzo destinazione: " + parent);
+        System.out.println("TEST: message to be sent to the sink: " + data);
 
         DatagramPacket p;
         InetAddress addr;
@@ -194,7 +189,6 @@ public class NetworkClass implements NetworkCommunication {
         }
 
         p = new DatagramPacket(mex, mex.length, addr, port);
-        System.out.println("TEST: indirizzo destinazione da inetAddress: " + addr.toString());
 
         positive_ack.set(false);
         wait_for_ack.set(true);
@@ -234,6 +228,7 @@ public class NetworkClass implements NetworkCommunication {
         receiveCalled = true;
         DatagramPacket p = new DatagramPacket(buffer, buffer.length);
         try {
+            System.out.println("Waiting to receive messages...");
             udpSocket.receive(p);
         } catch (IOException e) {
             System.err.println("Error in receiving the message!");
@@ -246,20 +241,18 @@ public class NetworkClass implements NetworkCommunication {
         sourcePacket = sourcePacket.substring(1);
 
         if (sourcePacket.equals(my_ip) || sourcePacket.equals("127.0.0.1")) {
-            System.out.println("Ricevuto un messaggio da me stesso medesimo");
-            System.out.println("Ricevuto: " + message);
+            //System.out.println("Ricevuto un messaggio da me stesso medesimo");
+            //System.out.println("Ricevuto: " + message);
             return 0;
         }
 
-        System.out.println("TEST: messaggio ricevuto: " + message);
-        System.out.println("TEST: indirizzo ip sorgente: " + p.getAddress().toString());
+        System.out.println("TEST: received message: " + message);
 
         JSONObject jsonObject;
         try {
             jsonObject = new JSONObject(new String(buffer));
         } catch (JSONException e) {
             System.err.println("Received a not valid json file!");
-            System.out.println("Received message: " + new String(p.getData()));
             return -1;
         }
 
@@ -267,6 +260,7 @@ public class NetworkClass implements NetworkCommunication {
 
         switch (handle) {
             case "forward_parent":
+                System.out.println("TEST: received a message to be forwarded to the parent");
                 send_direct(p.getData(), parent);
                 return 0;
 
@@ -276,6 +270,7 @@ public class NetworkClass implements NetworkCommunication {
                 JSONArray arr = jsonObject.getJSONArray("path");
                 if (arr.getString(0).equals(my_ip) && arr.length() == 1) {
                     //i'm destination
+                    System.out.println("TEST: received a message for me!");
                     String data = jsonObject.getString("data");
 
                     System.arraycopy(data.getBytes(), 0, buffer, 0, data.length());
@@ -290,6 +285,7 @@ public class NetworkClass implements NetworkCommunication {
 
                     if (arr.getString(0).equals("broadcast")) {
                         //for everyone
+                        System.out.println("TEST: Received a broadcast message!");
                         String data = jsonObject.getString("data");
                         System.arraycopy(data.getBytes(), 0, buffer, 0, data.length());
 
@@ -307,6 +303,7 @@ public class NetworkClass implements NetworkCommunication {
                     if (arr.length() >= 1) {
                         String nextHop = arr.getString(0);
                         String newMessage = jsonObject.toString();
+                        System.out.println("TEST: Receive a message to be forwarded to " + nextHop);
                         send_direct(newMessage.getBytes(), nextHop);
                         return 0;
                     } else {
@@ -318,11 +315,13 @@ public class NetworkClass implements NetworkCommunication {
 
             case "hello":
                 //rispondi con hello_risp and update info
+                System.out.println("TEST: received an hello message!");
                 send_hello("hello_risp", jsonObject.getString("ip"));
                 getHelloInfo(jsonObject.getString("ip"), jsonObject.getString("unique_id"), jsonObject.getInt("path"));
                 return 0;
 
             case "hello_risp":
+                System.out.println("TEST: received an hello_risp message!");
                 getHelloInfo(jsonObject.getString("ip"), jsonObject.getString("unique_id"), jsonObject.getInt("path"));
                 return 0;
 
@@ -332,14 +331,14 @@ public class NetworkClass implements NetworkCommunication {
                 try {
                     JSONArray path = jsonObject.getJSONArray("path");
                     //se c'è non è vuoto
-                    if (path.getString(0).equals(my_ip)) {
+                    if (path.getString(0).equals(my_ip) && path.length() == 1) {
                         //sono la destinazione
-                        System.out.println("Ricevuto ack da parent, sono la destinazione");
+                        System.out.println("TEST: received an ack for me!");
                         //received_ans = true;
                         received_ans.set(true);
                         if (wait_for_ack.get() && ack_source.equals(from)) {
                             //valid ack for me
-                            System.out.println("Ricevuto ack valido per me");
+                            System.out.println("TEST: the ack is valid!");
                             //positive_ack = jsonObject.getBoolean("type");
                             //wait_for_ack = false;
                             positive_ack.set(jsonObject.getBoolean("type"));
@@ -352,29 +351,36 @@ public class NetworkClass implements NetworkCommunication {
                         }
                     } else {
                         //devo forwardare al children corretto
-                        System.out.println("Ricevuto ack da parent, non sono la destinzazione");
+                        System.out.println("TEST: received an ack from parent, I'm not the destination!");
                         dest = path.getString(0);
-                        path.remove(0); //TODO: MODIFICA IL JSON?
+                        path.remove(0);
                         //dest = jsonObject.getString("path");
                         String new_message = jsonObject.toString();
-                        System.out.println("TEST: json modificato da inoltrare: " + new_message);
+                        //System.out.println("TEST: json modificato da inoltrare: " + new_message);
                         send_direct(new_message.getBytes(), dest);
                     }
                 } catch (JSONException e) {
                     //non c'è path, devo forwardare al parent
-                    System.out.println("Ricevuto ack da un children, inoltro a parent");
+                    System.out.println("TEST: received an ack from children!");
+
+                    //TODO: devo controllare se è per me (aspetto un ack e viene da lui) o se inoltrarlo al parent
+
                     send_direct(buffer, parent);    //TODO: CLEAR BUFFER OPPURE USA P.GETDATA
                     return 0;
                 }
                 return 0;
 
             case "change":
+                System.out.println("TEST: Received a change message!");
                 String child_change = jsonObject.getString("ip_source");
                 if (num_children < max_children) {
                     //aggiungi
                     int new_child = getIndexNeighbour(child_change);
                     if (new_child > 0) {
                         children.add(neighbours.get(new_child));
+                        System.out.println("TEST: added a new child!");
+                    } else {
+                        System.err.println("Difficulties in adding the new children...");
                     }
                     //NodeInfo n = new NodeInfo(child_change, jsonObject.getString("unique_id"), this.path_length+1);
                     //children.add(n);
@@ -384,11 +390,13 @@ public class NetworkClass implements NetworkCommunication {
                     num_children++;
                 } else {
                     //troppi figli, mando ack negativo
+                    System.out.println("Too many children for me!");
                     send_ack(false, child_change);
                 }
                 return 0;
 
             case "leave":
+                System.out.println("TEST: received a leave message!");
                 String child_leave = jsonObject.getString("ip_source");
                 int index = getIndexChild(child_leave);
                 if (index != -1) {
@@ -400,7 +408,7 @@ public class NetworkClass implements NetworkCommunication {
                 return 0;
 
             case "network_changed":
-                //todo: controlla che sia corretto
+                System.out.println("TEST: Received a network_changed message, forwarding it to parent!");
                 send_direct(p.getData(), parent);
                 return 0;
 
@@ -463,23 +471,23 @@ public class NetworkClass implements NetworkCommunication {
         if (ip.equals(parent)) {
             this.path_length = path + 1;
             parent_answer.set(true);
-            System.out.println("Read hello/hello_risp from parent");
+            System.out.println("TEST: Read hello/hello_risp from parent");
             return;
         }
 
         int index = getIndexChild(ip);
         if (index != -1) {
             children.get(index).clearNotSeen();
-            System.out.println("Read hello/hello_risp from known children");
+            System.out.println("TEST: Read hello/hello_risp from known children");
         } else {
             index = getIndexNeighbour(ip);
             if (index != -1) {
                 neighbours.get(index).clearNotSeen();
                 neighbours.get(index).setPathLength(path);
-                System.out.println("Read hello/hello_risp from known neighbour");
+                System.out.println("TEST: Read hello/hello_risp from known neighbour");
             } else {
                 neighbours.add(new NodeInfo(ip, id, path));
-                System.out.println("Read hello/hello_risp from new neighbour");
+                System.out.println("TEST: Read hello/hello_risp from new neighbour");
             }
         }
     }
@@ -488,11 +496,14 @@ public class NetworkClass implements NetworkCommunication {
      * Sorts neighbours, send a change parent to the best,
      * calls read to get the ack (if not already called)
      */
-    //TODO: se non trova nessuno e ho guardato tutti i vicini
-    //TODO: dovrei fallire e ricominciare dal send hello!
     private void change_parent() {
         positive_ack.set(false);
         String candidate = null;
+
+        if (parent != null) {
+            int index = getIndexNeighbour(parent);
+            neighbours.remove(index);
+        }
 
         neighbours.sort((n1, n2) -> {
             if (n1.getPathLength() > n2.getPathLength())
@@ -516,7 +527,7 @@ public class NetworkClass implements NetworkCommunication {
             }
 
             candidate = neighbours.get(i).get_ip();
-            System.out.println("Sending change parent to " + candidate);
+            System.out.println("TODO: Sending change parent to " + candidate);
             send_change(candidate);
             i++;
 
@@ -541,7 +552,7 @@ public class NetworkClass implements NetworkCommunication {
             path.put(dest);
             json.put("path", path);
         }
-
+        System.out.println("TEST: sending ack...");
         send_direct(json.toString().getBytes(), dest);
     }
 
@@ -560,7 +571,7 @@ public class NetworkClass implements NetworkCommunication {
         message.put("handle", type);
 
         String toSend = message.toString();
-        System.out.println("TEST: hello inviato: " + toSend);
+        System.out.println("TEST: sending hello...");
         byte[] mex = toSend.getBytes();
 
         send_direct(mex, dest);
@@ -578,7 +589,7 @@ public class NetworkClass implements NetworkCommunication {
         message.put("handle", "change");
 
         String toSend = message.toString();
-        System.out.println("TEST: change inviato: " + toSend);
+        System.out.println("TEST: sending change...");
         byte[] mex = toSend.getBytes();
 
         received_ans.set(false);
@@ -588,14 +599,16 @@ public class NetworkClass implements NetworkCommunication {
         byte[] buffer = new byte[512];
 
         send_direct(mex, dest);
+        int tent = 0;
 
-        while (!received_ans.get()) {   //non sono sicuro serva
+        while (!received_ans.get() && tent < 5) {   //non sono sicuro serva
             if (!receiveCalled) {
                 //prima volta in cui viene chiamata
                 udpReceive(buffer);
             } else {
                 try {
                     Thread.sleep(1000);
+                    tent++;
                     //aspetta semplicemente, la read è stata chiamata
                     //da un altro, non posso avere due read contemporaneamente
                 } catch (InterruptedException e) {
@@ -622,11 +635,11 @@ public class NetworkClass implements NetworkCommunication {
         int tent = 0;
 
         while (!received_ans.get() && tent < 2) {   //non sono sicuro serva
-
+            System.out.println("Sending a leave message...");
             send_direct(json.toString().getBytes(), parent);
             tent++;
             try {
-                Thread.sleep(1000);
+                Thread.sleep(2000);
                 //aspetta semplicemente, la read è stata chiamata
                 //da un altro, non posso avere due read contemporaneamente
             } catch (InterruptedException e) {
@@ -661,13 +674,13 @@ public class NetworkClass implements NetworkCommunication {
         ack_source = parent;
         int tent = 0;
 
-        while (!received_ans.get() && tent < 2) {   //non sono sicuro serva
-
+        while (!received_ans.get() && tent < 2) {
+            System.out.println("TEST: sending network_changed... tent = " + tent);
             send_direct(json.toString().getBytes(), parent);
             tent++;
 
             try {
-                Thread.sleep(1000);
+                Thread.sleep(3000);
                 //aspetta semplicemente, la read è stata chiamata
                 //da un altro, non posso avere due read contemporaneamente
             } catch (InterruptedException e) {
@@ -700,8 +713,8 @@ public class NetworkClass implements NetworkCommunication {
 
         p = new DatagramPacket(buffer, buffer.length, addr, port);
 
-        System.out.println("TEST: invio messaggio: " + toSend);
-        System.out.println("TEST: destinazione: " + dest);
+        System.out.println("TEST: Sending message : " + toSend);
+        System.out.println("to: " + dest);
 
         try {
             udpSocket.send(p);

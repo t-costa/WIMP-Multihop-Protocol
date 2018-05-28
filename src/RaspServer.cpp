@@ -47,9 +47,6 @@ std::string ip_to_ack;
 
 /// Shows the current connections between nodes (parent-children)
 void WIMP::show_routes() {
-#if debug
-    std::cout << "\nCalled show_routes" << std::endl;
-#endif
 
     std::cout << "Paths from Raspberry to any other node:" << std::endl;
 
@@ -89,10 +86,6 @@ void WIMP::show_routes() {
 /// \param child new child arrived, or child that is changing parents
 void WIMP::change_route(std::string const& parent, std::string const& child) {
 
-#if debug
-    std::cout << "\nCalled change_route, parent = " << parent << "\t child = " << child << std::endl;
-#endif
-
     if (routes.find(child) == routes.end()) {
         //new child
         routes.emplace(child, parent);
@@ -123,13 +116,9 @@ WIMP::show_routes();
 /// \param child child that is changing the parent
 void WIMP::remove_route(std::string const& parent, std::string const& child) {
 
-#if debug
-    std::cout << "\nCalled remove_route: parent = " << parent << "\t child = " << child << std::endl;
-#endif
-
     if (routes.find(child) == routes.end() || routes[child] != parent) {
 #if debug
-std::cout << "o non c'è child, o ha un parent diverso, in ogni caso non faccio niente..." << std::endl;
+std::cout << "Nothing to do..." << std::endl;
 WIMP::show_routes();
 #endif
         return; //ok, no info
@@ -151,10 +140,6 @@ WIMP::show_routes();
 /// \param data message to be sent
 void send_direct(const char* dest, const char* data) {
 
-#if debug
-    std::cout << "\nCalled send_direct: dest = " << dest << "\t data = " << data << std::endl;
-#endif
-
     //send udp message through socket (it's a neighbour)
 
     client.sin_family = AF_INET;
@@ -163,7 +148,7 @@ void send_direct(const char* dest, const char* data) {
     client.sin_port = htons(PORT);
 
 #if debug
-std::cout << "Sending a message to " << dest << " type:\n " << data << std::endl;
+std::cout << "Sending a message to " << dest << " data:\n " << data << std::endl;
 #endif
     cli_len = sizeof(client);
     sendto(socket_info, data, strlen(data),
@@ -176,10 +161,6 @@ std::cout << "Sending a message to " << dest << " type:\n " << data << std::endl
 /// \param child child we are looking for
 /// \return index of the child if found, -1 otherwise
 int get_child(std::string const& child) {
-
-#if debug
-    std::cout << "\nCalled get_chil: child = " << child << std::endl;
-#endif
 
     bool found = false;
     int i=0;
@@ -201,30 +182,11 @@ int get_child(std::string const& child) {
 /// order to reach the destination, empty vector if error
 std::vector<std::string> get_path(std::string const& dest) {
 
-#if debug
-    std::cout << "\nCalled get_pat: dest = " << dest << std::endl;
-#endif
-
     std::vector<std::string> path;
 
 #if debug
 std::cout << "Resolving path for: " << dest << std::endl;
 WIMP::show_routes();
-#endif
-
-#if debug
-for (auto cp : routes) {
-    if (cp.first == dest) {
-        std::cout << "cp.first = " << cp.first << " ed è uguale a " << dest << "." << std::endl;
-    } else {
-        std::cout << "cp.first = " << cp.first << " ed è diverso da " << dest << "." << std::endl;
-    }
-    if (cp.second == dest) {
-        std::cout << "cp.second = " << cp.second << " ed è uguale a " << dest << "." << std::endl;
-    } else {
-        std::cout << "cp.second = " << cp.second << " ed è diverso da " << dest << "." << std::endl;
-    }
-}
 #endif
 
     if (routes.find(dest) == routes.end()) {
@@ -247,7 +209,7 @@ std::cout << "dest not found, returning empty" << std::endl;
     }
 
     if (error) {
-        std::cerr << "the destination is not reachable" << std::endl;
+        std::cerr << "Destination not reachable" << std::endl;
         path.clear();
         return path;
     }
@@ -267,7 +229,7 @@ std::cout << "dest not found, returning empty" << std::endl;
 int WIMP::read(char* data) {
 
 #if debug
-    std::cout << "\nCalled read" << std::endl;
+    std::cout << "Waiting for new messages from WIMP nodes..." << std::endl;
 #endif
 
     ssize_t rec_len;
@@ -418,8 +380,6 @@ std::cout << "Received a change request, but I have too many children!" << std::
         ack_doc["path"] = json_vec; //è direttamente mio vicino
         const char* ack = ack_doc.dump().c_str();
 
-        std::cout << "Invio ack" << ack << std::endl;
-
         //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
         send_direct(source.c_str(), ack);
         get_path(source);
@@ -450,9 +410,6 @@ std::cout << "Parsing a LEAVE message" << std::endl;
             num_children--;
         }
 
-#if debug
-std::cout << "Source leave: " << source << std::endl;
-#endif
         json ack_doc;
         ack_doc["handle"] = "ack";
         ack_doc["ip_source"] = my_ip;
@@ -493,17 +450,32 @@ std::cout << "Parsing a NETWORK_CHANGED message" << std::endl;
         std::string child = doc["ip_child"].get<std::string>();
         std::string parent = doc["ip_parent"].get<std::string>();
 
+        json ack_doc;
+        auto path = get_path(parent);   //potrebbe essere un nodo lontano
+        json json_vec = path;
+        ack_doc["handle"] = "ack";
+        ack_doc["ip_source"] = my_ip;
+        ack_doc["type"] = true;
+        ack_doc["path"] = json_vec;
+        const char* ack = ack_doc.dump().c_str();
+
+
         if (op == "new_child") {
             WIMP::change_route(parent, child);
+            send_direct(path[0].c_str(), ack);
             return 0;
         }
         if (op == "removed_child") {
             WIMP::remove_route(parent, child);
+            send_direct(path[0].c_str(), ack);
             return 0;
         }
 #if debug
 std::cerr << "Unexpected error in parsing network_changed" << std::endl;
 #endif
+        ack_doc["type"] = false;
+        ack = ack_doc.dump().c_str();
+        send_direct(path[0].c_str(), ack);
         return -1;
 
     }
@@ -526,7 +498,7 @@ std::cout << "Parsing a FORWARD_PARENT message" << std::endl;
             data[i] = msg[i];
         }
 #if debug
-std::cout << "Data: " << data << std::endl;
+std::cout << "Data for application: " << data << std::endl;
 #endif
         //for application
         //buffer.push(data);
@@ -540,10 +512,6 @@ std::cout << "Data: " << data << std::endl;
         ack_doc["path"] = j_vec;
 
         const char* ack = ack_doc.dump().c_str();
-
-#if debug
-std::cout << "Sending" << ack << " to " << source << std::endl;
-#endif
 
 //        if (path.empty()) {
 //            send_direct(source.c_str(), ack);   //è direttamente collegato
@@ -604,13 +572,9 @@ std::cerr << "qualquadra non cosa" << std::endl;
 /// \return true iff the message has been correctly sent and received
 bool WIMP::send(const char* data, const char* dest_id) {
 
-#if debug
-    std::cout << "\nCalled send (ip): data = " << data << "\t dest = " << dest_id << std::endl;
-#endif
-
     //build json with forward_children and path
     //document is the root of a json message
-    bool broadcast = false;
+    //bool broadcast = false;
     json document;
 
 #if debug
@@ -625,8 +589,6 @@ std::cout << "Original message to be sent: " << data << std::endl;
     json j_vec;
 
     if (path.empty()) {
-        //TODO: dovrebbero esserci funzioni per vedere se un
-        //TODO: dato ip è un indirizzo di broadcast...
 //        if (strcmp(dest, "255.255.255.255") != 0) {
 //            std::cerr << "Error in searching the path, dest not found and not broadcast" << std::endl;
 //            return false;
@@ -641,9 +603,6 @@ std::cout << "Original message to be sent: " << data << std::endl;
         std::cerr << "Error in searching the path, dest not found!" << std::endl;
         return false;
     } else {
-#if debug
-std::cout << "Sending message in unicast" << std::endl;
-#endif
         j_vec = path;
     }
 
@@ -800,11 +759,6 @@ std::cout << "Socket created" << std::endl;
     server.sin_family = AF_INET;
     server.sin_addr.s_addr = INADDR_ANY;
     server.sin_port = htons( PORT );
-
-#if debug
-std::cout << server.sin_addr.s_addr << std::endl;
-std::cout << server.sin_port << std::endl;
-#endif
 
     //bind socket with ip
     if (bind(socket_info, (struct sockaddr *)&server, sizeof(server)) < 0) {
