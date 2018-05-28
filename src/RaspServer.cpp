@@ -76,7 +76,7 @@ void WIMP::show_routes() {
         }
 
         std::reverse(parents.begin(), parents.end());
-        for (auto par : parents) {
+        for (auto const& par : parents) {
             std::cout << par << " -> ";
         }
         std::cout << child << std::endl;
@@ -404,12 +404,12 @@ std::cout << "Received a change request, but I have too many children!" << std::
             return 0;
         }
 
-        WIMP::change_route("Sink", source.c_str());
+        WIMP::change_route("Sink", source);
         children.emplace_back(source, 0);
         num_children++;
 
         json ack_doc;
-        json json_vec = get_path(source.c_str());
+        json json_vec = get_path(source);
         ack_doc["handle"] = "ack";
         ack_doc["ip_source"] = my_ip;
         ack_doc["type"] = true;
@@ -420,7 +420,7 @@ std::cout << "Received a change request, but I have too many children!" << std::
 
         //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
         send_direct(source.c_str(), ack);
-        get_path(source.c_str());
+        get_path(source);
         return 0;
     }
 
@@ -435,7 +435,7 @@ std::cout << "Parsing a LEAVE message" << std::endl;
         }
         std::string source = doc["ip_source"].get<std::string>();
 
-        routes.erase(source.c_str());
+        routes.erase(source);
         //remove child
         auto i_remove = children.end();
         for (auto it = children.begin(); it != children.end(); it++) {
@@ -492,11 +492,11 @@ std::cout << "Parsing a NETWORK_CHANGED message" << std::endl;
         std::string parent = doc["ip_parent"].get<std::string>();
 
         if (op == "new_child") {
-            WIMP::change_route(parent.c_str(), child.c_str());
+            WIMP::change_route(parent, child);
             return 0;
         }
         if (op == "removed_child") {
-            WIMP::remove_route(parent.c_str(), child.c_str());
+            WIMP::remove_route(parent, child);
             return 0;
         }
 #if debug
@@ -569,7 +569,7 @@ std::cout << "Parsing a ACK message" << std::endl;
             return -1;
         }
 
-        bool type = doc["type"].get<bool>();
+        auto type = doc["type"].get<bool>();
         std::string source = doc["ip_source"].get<std::string>();
 
 #if debug
@@ -598,8 +598,8 @@ std::cerr << "qualquadra non cosa" << std::endl;
 
 /// Sends a message to the specific destination
 /// \param data message to be sent
-/// \param dest destination node
-/// \return true iff the node has been correctly sent and received by the destination
+/// \param dest IP of destination node
+/// \return true iff the message has been correctly sent and received
 bool WIMP::send(const char* data, const char* dest) {
 
 #if debug
@@ -630,7 +630,7 @@ std::cout << "Original message to be sent: " << data << std::endl;
 #if debug
 std::cout << "Sending message in broadcast" << std::endl;
 #endif
-        path.push_back("broadcast");
+        path.emplace_back("broadcast");
         j_vec = path;
     } else {
 #if debug
@@ -640,7 +640,7 @@ std::cout << "Sending message in unicast" << std::endl;
     }
 
     document["path"] = j_vec;
-    document["data"] = data;
+    document["data"] = json::parse(data);
 
     client.sin_family = AF_INET;
     client.sin_addr.s_addr = inet_addr(dest);
@@ -666,7 +666,7 @@ std::cout << "ip_to_ack: " << ip_to_ack << std::endl;
     int _try = 0;
     //TODO: per ora la send è singola, quindi aspetto un ack da un solo ip
     while (wait_for_ack && _try < 5) {
-        sendto(socket_info, payload, strlen(data),
+        sendto(socket_info, payload, strlen(payload),
                MSG_CONFIRM, (const struct sockaddr *) &client,
                cli_len);
 
@@ -678,6 +678,10 @@ std::cout << "ip_to_ack: " << ip_to_ack << std::endl;
     return !wait_for_ack;
 }
 
+/// Sends a nessage to the specific destination
+/// \param data message to be sent
+/// \param dest ID of the destination node
+/// \return true iff the message has been correctly sent and received
 bool WIMP::send(const char *data, int dest) {
 
 #if debug
@@ -732,7 +736,7 @@ for (auto& c : children) {
 #if debug
 std::cout << "removing " << (*i_remove).first << std::endl;
 #endif
-                routes.erase((*i_remove).first.c_str());    //remove route
+                routes.erase((*i_remove).first);    //remove route
                 children.erase(i_remove);
                 num_children--;
             } else {
@@ -757,7 +761,7 @@ std::cout << "qualcosa di impossibile è appena successa..." << std::endl;
 /// \return true iff the initialization has been completed without errors
 bool WIMP::initialize(const char* ip) {
 
-    struct sockaddr_in sa;
+    struct sockaddr_in sa{};
     if (inet_pton(AF_INET, ip, &(sa.sin_addr)) <= 0) {
         std::cerr << "Invalid ip address" << std::endl;
         return false;
