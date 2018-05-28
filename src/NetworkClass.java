@@ -246,6 +246,7 @@ public class NetworkClass implements NetworkCommunication {
         }
 
         System.out.println("TEST: received message: " + message);
+        System.out.println("ip sorgente: " + sourcePacket);
 
         JSONObject jsonObject;
         try {
@@ -270,9 +271,9 @@ public class NetworkClass implements NetworkCommunication {
                 if (arr.getString(0).equals(my_ip) && arr.length() == 1) {
                     //i'm destination
                     System.out.println("TEST: received a message for me!");
-                    String data = jsonObject.getString("data");
+                    JSONObject data = jsonObject.getJSONObject("data");
 
-                    System.arraycopy(data.getBytes(), 0, buffer, 0, data.length());
+                    System.arraycopy(data.toString().getBytes(), 0, buffer, 0, data.length());
 
                     for (int i=data.length(); i<buffer.length; ++i) {
                         buffer[i] = 0;
@@ -501,7 +502,9 @@ public class NetworkClass implements NetworkCommunication {
 
         if (parent != null) {
             int index = getIndexNeighbour(parent);
-            neighbours.remove(index);
+            if (index >= 0) {
+                neighbours.remove(index);
+            }
             try {
                 Thread.sleep(15000);
             } catch (InterruptedException e) {
@@ -510,7 +513,7 @@ public class NetworkClass implements NetworkCommunication {
         }
 
         neighbours.sort((n1, n2) -> {
-            if (n1.getPathLength() > n2.getPathLength())
+            if (n1.getPathLength() < n2.getPathLength())
                 return 1;
             else
                 return 0;
