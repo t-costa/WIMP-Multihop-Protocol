@@ -23,7 +23,6 @@ public class ThreadReceiver extends Thread {
 
             if (n == 0) {
                 System.out.println("Ricevuto un messaggio di gestione");
-                System.out.println("Stampa brutta: " + buffer);
             }
 
             if (n < 0) {

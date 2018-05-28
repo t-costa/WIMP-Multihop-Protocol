@@ -17,6 +17,7 @@ public class NetworkClass implements NetworkCommunication {
     private ArrayList<NodeInfo> neighbours;
     private String parent;
     private String my_ip;
+    private int my_id;
     private int num_children;
     private int max_children;
 
@@ -34,7 +35,7 @@ public class NetworkClass implements NetworkCommunication {
      * @param max_children maximum number of children that the node can have
      * @param my_ip IP address of the node
      */
-    NetworkClass(int max_children, String my_ip) {
+    NetworkClass(int max_children, String my_ip, int my_id) {
         this.num_children = 0;
         this.max_children = max_children;
 
@@ -46,6 +47,7 @@ public class NetworkClass implements NetworkCommunication {
 
         this.path_length = 255;
         this.my_ip = my_ip;
+        this.my_id = my_id;
         children = new ArrayList<>(this.max_children);
         neighbours = new ArrayList<>();
         parent = null;
@@ -221,6 +223,7 @@ public class NetworkClass implements NetworkCommunication {
      * -1 if an error occurs
      */
     @Override
+    //TODO: c'è anche la possibilità che un messaggio con forward_children abbia il broadcast!
     public int udpReceive(byte[] buffer) {
         receiveCalled = true;
         DatagramPacket p = new DatagramPacket(buffer, buffer.length);
@@ -258,7 +261,6 @@ public class NetworkClass implements NetworkCommunication {
 
         switch (handle) {
             case "forward_parent":
-                //todo: controlla che sia corretto
                 send_direct(p.getData(), parent);
                 return 0;
 
@@ -275,11 +277,26 @@ public class NetworkClass implements NetworkCommunication {
                     }
                     return data.length();
                 } else {
-                    //forward to children
+
+                    if (arr.getString(0).equals("broadcast")) {
+                        //for everyone
+                        String data = jsonObject.getString("data");
+                        buffer = data.getBytes();
+                        for (int i=data.length(); i<buffer.length; ++i) {
+                            buffer[i] = 0;
+                        }
+                        //forward to all children
+                        for (NodeInfo ni : children) {
+                            send_direct(p.getData(), ni.get_ip());
+                        }
+                        return data.length();
+                    }
+                    //forward to the right children and change message
                     String nextHop = arr.getString(0);
                     arr.remove(0);
                     String newMessage = jsonObject.toString();
                     send_direct(newMessage.getBytes(), nextHop);
+                    return 0;
                 }
 
             case "hello":
@@ -447,11 +464,12 @@ public class NetworkClass implements NetworkCommunication {
         }
     }
 
-
     /**
      * Sorts neighbours, send a change parent to the best,
      * calls read to get the ack (if not already called)
      */
+    //TODO: se non trova nessuno e ho guardato tutti i vicini
+    //TODO: dovrei fallire e ricominciare dal send hello!
     private void change_parent() {
         positive_ack.set(false);
         String candidate = null;
@@ -475,32 +493,9 @@ public class NetworkClass implements NetworkCommunication {
         int i = 0;
 
         while (!positive_ack.get()) {
-            //TODO: se non trova nessuno e ho guardato tutti i vicini
-            //TODO: dovrei fallire e ricominciare dal send hello!
             candidate = neighbours.get(i).get_ip();
             System.out.println("Sending change parent to " + candidate);
             send_change(candidate);
-
-            received_ans.set(false);
-            wait_for_ack.set(true);
-            ack_source = candidate;
-            byte[] buffer = new byte[512];
-
-            while (!received_ans.get()) {
-                if (!receiveCalled) {
-                    //prima volta in cui viene chiamata
-                    udpReceive(buffer);
-                } else {
-                    try {
-                        Thread.sleep(1000);
-                        //aspetta semplicemente, la read è stata chiamata
-                        //da un altro, non posso avere due read contemporaneamente
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
-                }
-
-            }
             i++;
         }
         parent = candidate;
@@ -530,7 +525,7 @@ public class NetworkClass implements NetworkCommunication {
      */
     private void send_hello(String type, String dest) {
         JSONObject message = new JSONObject();
-        message.put("unique_id", 7);
+        message.put("unique_id", my_id);
         message.put("ssid", "WIMP_SIM");
         message.put("path", path_length);
         message.put("ip", my_ip);
@@ -546,9 +541,9 @@ public class NetworkClass implements NetworkCommunication {
     /**
      * Sends a change_parent message to the specified destination
      * @param dest IP address of the destination
+     * @return true iff the message has been sent and acked
      */
-    //TODO: serve lettura ack per vedere se è andata bene?
-    private void send_change(String dest) {
+    private boolean send_change(String dest) {
         JSONObject message = new JSONObject();
         message.put("ip_old_parent", (parent != null) ? parent : my_ip);
         message.put("ip_source", my_ip);
@@ -558,33 +553,70 @@ public class NetworkClass implements NetworkCommunication {
         System.out.println("TEST: change inviato: " + toSend);
         byte[] mex = toSend.getBytes();
 
+        received_ans.set(false);
+        wait_for_ack.set(true);
+        positive_ack.set(false);
+        ack_source = dest;
+        byte[] buffer = new byte[512];
+
         send_direct(mex, dest);
+
+        while (!received_ans.get()) {   //non sono sicuro serva
+            if (!receiveCalled) {
+                //prima volta in cui viene chiamata
+                udpReceive(buffer);
+            } else {
+                try {
+                    Thread.sleep(1000);
+                    //aspetta semplicemente, la read è stata chiamata
+                    //da un altro, non posso avere due read contemporaneamente
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        }
+        return positive_ack.get();
     }
 
     /**
      * Creates and sends a leave message to the parent
      * @return true iff we received an ack
      */
-    //todo: l'ack è sempre positivo ma se non lo ricevo devo rimandare!
     private boolean send_leave() {
         JSONObject json = new JSONObject();
         json.put("handle", "leave");
         json.put("ip_source", my_ip);
 
-        send_direct(json.toString().getBytes(), parent);
+        received_ans.set(false);
+        wait_for_ack.set(true);
+        positive_ack.set(false);
+        ack_source = parent;
+        int tent = 0;
 
-        //serve settare variabili per l'ack e aspettare la ricezione
+        while (!received_ans.get() && tent < 2) {   //non sono sicuro serva
 
-        return false;
+            send_direct(json.toString().getBytes(), parent);
+            tent++;
+            try {
+                Thread.sleep(1000);
+                //aspetta semplicemente, la read è stata chiamata
+                //da un altro, non posso avere due read contemporaneamente
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+
+        }
+
+        return received_ans.get();
     }
 
     /**
      * Sends a network_changed message to the sink of the net
      * @param add Specifies the kind of operation: new_child or removed_child
      * @param child Child that has been added/removed
+     * @return true iff I received a positive ack
      */
-    //todo: direi che serve ack
-    private void send_net_change(boolean add, String child) {
+    private boolean send_net_change(boolean add, String child) {
         JSONObject json = new JSONObject();
         json.put("handle", "network_changed");
         json.put("ip_child", child);
@@ -595,7 +627,27 @@ public class NetworkClass implements NetworkCommunication {
             json.put("operation", "removed_child");
         }
 
-        send_direct(json.toString().getBytes(), parent);
+        received_ans.set(false);
+        wait_for_ack.set(true);
+        positive_ack.set(false);
+        ack_source = parent;
+        int tent = 0;
+
+        while (!received_ans.get() && tent < 2) {   //non sono sicuro serva
+
+            send_direct(json.toString().getBytes(), parent);
+            tent++;
+
+            try {
+                Thread.sleep(1000);
+                //aspetta semplicemente, la read è stata chiamata
+                //da un altro, non posso avere due read contemporaneamente
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+        return positive_ack.get();
     }
 
     /**
