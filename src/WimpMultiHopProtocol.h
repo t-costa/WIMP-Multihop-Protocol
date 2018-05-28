@@ -24,7 +24,7 @@ namespace WIMP {
      * Send data to sink (and only to sink!)
      * loop is needed for reliability
     */
-    void send(char* data);
+    void send(const char* data);
 
     /**
      * Calls all the needed functions for the first start (at least):

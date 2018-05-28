@@ -8,7 +8,7 @@
 #include <string>
 #include <ctime>
 #include <sstream>
-//#include <random>
+#include <random>
 
 
 
@@ -40,7 +40,7 @@ node_info parent = default_parent;
 node_info children[MAX_CHILDREN];
 node_info neighbours[MAX_NEIGHBOURS];   //dovrebbe essere ordinato per path_length e power signal!
 
-WiFiEventHandler stationDisconnectedHandler;
+//WiFiEventHandler stationDisconnectedHandler, stationConnectedHandler;
 
 char buffer[LEN_BUFFER][LEN_PACKET];  //keep list of incoming messages (circular)
 bool positive_ack = false, message_waiting = false, parent_answer = false;
@@ -234,7 +234,7 @@ Serial.printf("IP: %s\n PATH: %d\n", other.toString().c_str(), other_path);
         parent.len_path = other_path;
         parent.times_not_seen = 0;
     } else {
-        int i = search(other, children, num_children);
+        i = search(other, children, num_children);
         if (i != -1) {
             //update info of child
 #if debug
@@ -408,6 +408,8 @@ Serial.printf("Refused because reached max_children\n");
 #if debug
 Serial.println("My parent is the same as old parent! Shit");
 #endif
+            //TODO: dovrebbe essere questo il caso scatenante
+            WIMP::ack(new_child, false);
             return;
         }
 
@@ -698,7 +700,7 @@ int WIMP::read(char* data) {
 
 /// Sends data to sink (and only to sink!)
 /// \param data message to be sent to the sink
-void WIMP::send(char* data) {
+void WIMP::send(const char* data) {
     JsonObject& root = json_buffer.createObject();
     root["handle"] = "forward_parent";
     root["data"] = data;
@@ -1156,16 +1158,21 @@ void on_disconnect(const WiFiEventSoftAPModeStationDisconnected& event) {
     Serial.println("I'm disconnected! Check if it reconnects by itself, probably we should simply change ap");
 }
 
+void on_connect(const WiFiEventSoftAPModeStationConnected& event) {
+    Serial.println("I'm connected!");
+}
+
 /// Initializes the network
 void WIMP::initialize() {
 //    std::random_device rd;
 //    std::mt19937 gen(rd());
 //    std::uniform_int_distribution<> dis(1, 254);
 
-    srand((uint) time(NULL));
+    //srand((uint) time(NULL));
     //auto chip_id = (uint8_t) dis(gen);
-    auto chip_id = static_cast<uint8_t>((rand() % 254) + 1);   //system_get_chip_id();
+    //auto chip_id = static_cast<uint8_t>((rand() % 254) + 1);   //system_get_chip_id();
     //TODO: POSSO ACCEDERE AL MAC DEL NODO, POTREI COSTRUIRMI L'IP DA QUELLO
+    uint8_t chip_id = 7;
 
 #if debug
 Serial.printf("Random generated ip: %d\n", chip_id);
@@ -1178,7 +1185,8 @@ Serial.printf("Random generated ip: %d\n", chip_id);
     WiFi.softAPConfig(ip, gateway, subnet);
 
     // da errore ma su arduino compila
-    stationDisconnectedHandler = WiFi.onSoftAPModeStationDisconnected(&on_disconnect);
+    //stationDisconnectedHandler = WiFi.onSoftAPModeStationDisconnected(&on_disconnect);
+    //stationConnectedHandler = WiFi.onSoftAPModeStationConnected(&on_connect);
 
     sprintf(ssid_name, "WIMP_%d", chip_id);
 

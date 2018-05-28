@@ -3,11 +3,16 @@ public class test {
 
     public static void main(String[] args) {
 
-        NetworkCommunication net = new NetworkClass(1, "192.168.178.50");
+        NetworkCommunication net = new NetworkClass(1, "192.168.43.114", 10);
 
-        if (!net.udpInitialize(42100)) {
-            System.err.println("Inizializzazione fallita...");
-            return;
+        while (!net.udpInitialize(42100)) {
+            System.err.println("Inizializzazione fallita... Trying again in 10 seconds");
+            try {
+                Thread.sleep(10000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+                return;
+            }
         }
 
 

@@ -65,6 +65,7 @@ public class NetworkClass implements NetworkCommunication {
         this.port = port;
         try {
             udpSocket = new DatagramSocket(port);
+            udpSocket.setBroadcast(true);
         } catch (SocketException e) {
             System.err.println("Error in creating DatagramSocket");
             return false;
@@ -92,7 +93,7 @@ public class NetworkClass implements NetworkCommunication {
         initializer.start();
 
         try {
-            Thread.sleep(2000);
+            Thread.sleep(4000);
             udpSocket.close();  //kills initializer
             Thread.sleep(100);
         } catch (InterruptedException e) {
@@ -102,6 +103,7 @@ public class NetworkClass implements NetworkCommunication {
         try {
             //rebuild socket
             udpSocket = new DatagramSocket(port);
+            udpSocket.setBroadcast(true);
         } catch (SocketException e) {
             System.err.println("Error in creating DatagramSocket");
             return false;
@@ -110,6 +112,11 @@ public class NetworkClass implements NetworkCommunication {
         //look in neighbours a parent
         receiveCalled = false;
         change_parent();
+
+        if (!positive_ack.get()) {
+            System.out.println("Errore in inizializzazione, non ho trovato un parent!");
+            return false;
+        }
 
         Thread manager = new Thread(() -> {
             while (true) {
@@ -198,7 +205,7 @@ public class NetworkClass implements NetworkCommunication {
             while (wait_for_ack.get() && _try < 2) {
                 udpSocket.send(p);
                 System.out.println("Message sent, tent = " + _try);
-                Thread.sleep(1000);
+                Thread.sleep(3000);
                 _try++;
             }
 
@@ -223,7 +230,6 @@ public class NetworkClass implements NetworkCommunication {
      * -1 if an error occurs
      */
     @Override
-    //TODO: c'è anche la possibilità che un messaggio con forward_children abbia il broadcast!
     public int udpReceive(byte[] buffer) {
         receiveCalled = true;
         DatagramPacket p = new DatagramPacket(buffer, buffer.length);
@@ -268,7 +274,7 @@ public class NetworkClass implements NetworkCommunication {
                 //controlla se è per te o se devi inoltrare e modificare il json
 
                 JSONArray arr = jsonObject.getJSONArray("path");
-                if (arr.getString(0).equals(my_ip)) {
+                if (arr.getString(0).equals(my_ip) && arr.length() == 1) {
                     //i'm destination
                     String data = jsonObject.getString("data");
 
@@ -297,16 +303,22 @@ public class NetworkClass implements NetworkCommunication {
                         return data.length();
                     }
                     //forward to the right children and change message
-                    String nextHop = arr.getString(0);
                     arr.remove(0);
-                    String newMessage = jsonObject.toString();
-                    send_direct(newMessage.getBytes(), nextHop);
-                    return 0;
+                    if (arr.length() >= 1) {
+                        String nextHop = arr.getString(0);
+                        String newMessage = jsonObject.toString();
+                        send_direct(newMessage.getBytes(), nextHop);
+                        return 0;
+                    } else {
+                        System.err.println("Error in receiving ack, maybe someone is dead?");
+                        return -1;
+                    }
+
                 }
 
             case "hello":
                 //rispondi con hello_risp and update info
-                send_hello("hello_risp", jsonObject.getString("ip_source"));
+                send_hello("hello_risp", jsonObject.getString("ip"));
                 getHelloInfo(jsonObject.getString("ip"), jsonObject.getString("unique_id"), jsonObject.getInt("path"));
                 return 0;
 
@@ -360,9 +372,12 @@ public class NetworkClass implements NetworkCommunication {
                 String child_change = jsonObject.getString("ip_source");
                 if (num_children < max_children) {
                     //aggiungi
-                    //TODO: mi sa che in change non metto unique_id, controlla!
-                    NodeInfo n = new NodeInfo(child_change, jsonObject.getString("unique_id"), this.path_length+1);
-                    children.add(n);
+                    int new_child = getIndexNeighbour(child_change);
+                    if (new_child > 0) {
+                        children.add(neighbours.get(new_child));
+                    }
+                    //NodeInfo n = new NodeInfo(child_change, jsonObject.getString("unique_id"), this.path_length+1);
+                    //children.add(n);
                     send_ack(true, child_change);
                     //informa sink
                     send_net_change(true, child_change);
@@ -486,8 +501,6 @@ public class NetworkClass implements NetworkCommunication {
                 return 0;
         });
 
-        //TODO: dovrei vedere se ho sortato bene
-
         System.out.println("TEST: Sorted neighbours:");
         for (NodeInfo n : neighbours) {
             System.out.println("Node ip: " + n.get_ip() +
@@ -498,10 +511,15 @@ public class NetworkClass implements NetworkCommunication {
         int i = 0;
 
         while (!positive_ack.get()) {
+            if (i >= neighbours.size()) {
+                return;
+            }
+
             candidate = neighbours.get(i).get_ip();
             System.out.println("Sending change parent to " + candidate);
             send_change(candidate);
             i++;
+
         }
         parent = candidate;
         System.out.println("My parent is " + parent);
@@ -518,6 +536,11 @@ public class NetworkClass implements NetworkCommunication {
         json.put("handle", "ack");
         json.put("ip_source", my_ip);
         json.put("type", type);
+        if (!dest.equals(parent)) {
+            JSONArray path = new JSONArray();
+            path.put(dest);
+            json.put("path", path);
+        }
 
         send_direct(json.toString().getBytes(), dest);
     }

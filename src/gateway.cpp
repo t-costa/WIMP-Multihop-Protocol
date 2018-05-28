@@ -23,45 +23,6 @@
 
 using json = nlohmann::json;
 
-void sender() {
-    sleep(5);
-    std::vector<std::string> messages;
-
-    std::string hello, ack, leave, change, forpar, forchi;
-    hello = R"({"handle":"hello","ip":"192.168.43.114","path":"77"})";
-    ack = R"({"handle" : "ack","type" : "true"})";
-    forpar = R"({"handle" : "forward_parent","data":{"type":"place","from":"DEVICE_ID","place":"7","status":"busy"}})";
-    leave = R"({"handle" : "leave",	"ip_source" : "192.168.91.10"})";
-    change = R"({"handle" : "change","ip_source" : "192.54.153.15","ip_old_parent" : "192.168.12.12"})";
-    forchi = R"({"type": "ledstatus","from": "DEVICE_ID","place": "7","light": "on"})";
-
-    messages.push_back(hello);
-    messages.push_back(ack);
-    messages.push_back(forchi);
-    messages.push_back(forpar);
-    messages.push_back(change);
-    messages.push_back(leave);
-
-    std::cout << "Messages formed" << std::endl;
-
-    srand(time(NULL));
-    bool t = true;
-    while (t) {
-        sleep(30);
-        int i = rand() % 6;
-        WIMP::show_routes();
-        sleep(1);
-        std::cout << "Sending message: " << messages[i] << std::endl;
-
-        if (i%2 == 0) {
-            WIMP::send(messages[i].c_str(), "192.168.43.57");
-        } else {
-            WIMP::send(messages[i].c_str(), "255.255.255.255");
-        }
-        t = (i != 7);
-    }
-}
-
 void wsn2wlm_forwarder() {
     struct sockaddr_in si_other;
     int s = 0;
@@ -83,7 +44,26 @@ void wsn2wlm_forwarder() {
 
     std::cout << "Now forwarding from WSN to WLM" << std::endl;
 
+//
+//    sleep(10);
+//    json tt;
+//    tt["type"] = "place";
+//    tt["from"] = "D1";
+//    tt["place"] = 0;
+//    tt["status"] = "busy";
+//    const char* mm = tt.dump().c_str();
+
     char msg[PACKET_SIZE];
+//    for (int i=0; i< strlen(mm); ++i) {
+//        msg[i] = mm[i];
+//    }
+//
+//    if (sendto(s, msg, 512, 0, (struct sockaddr *) &si_other, slen) < 0) {
+//        std::cerr << "Error while forwarding message to WLM." << std::endl;
+//        //cacca
+//    }
+
+
     int n = 0;
     while(true) {
         // Read from WSN
@@ -144,7 +124,8 @@ void wlm2wsn_forwarder() {
 
     while(true) {
         // Try to receive some data, this is a blocking call.
-        if ((recv_len = recvfrom(s, buf, PACKET_SIZE, 0, (struct sockaddr *) &si_other, &slen)) == -1) {
+        recv_len = recvfrom(s, buf, PACKET_SIZE, 0, (struct sockaddr *) &si_other, &slen);
+        if (recv_len < 0) {
             std::cerr << "Error while receiving UDP packets from WLM." << std::endl;
         }
 
@@ -161,6 +142,7 @@ void wlm2wsn_forwarder() {
                 std::cout << "received packet: " << buf  << "\tdest ip: " << ip << std::endl;
 
                 WIMP::send(buf, ip.c_str());
+                //TODO: dovrei controllare esito della send per vedere se ho ricevuto ack?
             } catch  (json::parse_error &e) {
                 std::cerr << "Error in parsing!" << std::endl;
             }
@@ -197,13 +179,9 @@ int main(int argc, char* argv[]) {
     std::cout << "Connecting WSN to WLM..." << std::endl;
     std::thread wsn2wlm_worker(wsn2wlm_forwarder);
 
-    //std::cout << "Starting sender test..." << std::endl;
-    //std::thread sender_worker(sender);
-
     // Join the forwarders for termination.
     wlm2wsn_worker.join();
     wsn2wlm_worker.join();
-    //sender_worker.join();
 
     std::cout << "All forwarders have been terminated. Goodbye!" << std::endl;
 

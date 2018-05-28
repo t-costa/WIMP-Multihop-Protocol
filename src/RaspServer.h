@@ -4,6 +4,7 @@
  * e far diventare il raspi un access point
 */
 
+
 namespace WIMP {
 
     /**
@@ -19,12 +20,12 @@ namespace WIMP {
     /**
      * Changes a route (change of parent or children) or adds the new route
     */
-    void change_route(const char* parent, const char* child);
+    void change_route(std::string const& parent, std::string const& child);
 
     /**
      * Removes a not valide route in the network
     */
-    void remove_route(const char* parent, const char* child);
+    void remove_route(std::string const& parent, std::string const& child);
 
     /**
      * Sends a message to the specific destination
@@ -37,11 +38,11 @@ namespace WIMP {
      * @param dest id of destination
      * @return true iff the message is correctly sent
      */
-    bool send(const char* data, int dest);
+    //bool send(const char* data, int dest);
 
     /**
      * Reads an incoming message from a generic node
     */
-    int read(std::string data);
+    int read(char* data);
 
 }

@@ -26,8 +26,8 @@ using json = nlohmann::json;
 
 //child - parent
 std::unordered_map<std::string, std::string> routes;
-std::unordered_map<int32_t, std::string> id_ip;
-std::unordered_map<std::string, int32_t> ip_id;
+std::unordered_map<std::string, std::string> id_ip;
+std::unordered_map<std::string, std::string> ip_id;
 std::vector<std::pair<std::string, int32_t>> children;
 int num_children = 0;
 
@@ -312,7 +312,7 @@ std::cout << "Parsing a HELLO message" << std::endl;
         hello_doc["ip"] = my_ip;
         hello_doc["path"] = 0;
         hello_doc["ssid"] = "WIMP_0";
-        hello_doc["unique_id"] = 0;
+        hello_doc["unique_id"] = "0";
         const char* hello_risp = hello_doc.dump().c_str();
         //const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0","unique_id":0})";
 
@@ -327,7 +327,7 @@ std::cout << "Parsing a HELLO message" << std::endl;
         }
 
         std::string dest = doc["ip"].get<std::string>();
-        uint32_t id = doc["unique_id"].get<int32_t>();
+        std::string id = doc["unique_id"].get<std::string>();
 
         //add connection id-ip
         id_ip[id] = dest;
@@ -393,7 +393,9 @@ std::cout << "Received a change request, but I have too many children!" << std::
 #endif
             //send negative ack
             json ack_doc;
-            json json_vec = get_path(source);
+            std::vector<std::string> path;
+            path.emplace_back(source);
+            json json_vec = path;   // get_path(source); è direttamente collegato
             ack_doc["handle"] = "ack";
             ack_doc["ip_source"] = my_ip;
             ack_doc["type"] = false;
@@ -600,19 +602,22 @@ std::cerr << "qualquadra non cosa" << std::endl;
 /// \param data message to be sent
 /// \param dest IP of destination node
 /// \return true iff the message has been correctly sent and received
-bool WIMP::send(const char* data, const char* dest) {
+bool WIMP::send(const char* data, const char* dest_id) {
 
 #if debug
-    std::cout << "\nCalled send (ip): data = " << data << "\t dest = " << dest << std::endl;
+    std::cout << "\nCalled send (ip): data = " << data << "\t dest = " << dest_id << std::endl;
 #endif
 
     //build json with forward_children and path
     //document is the root of a json message
+    bool broadcast = false;
     json document;
 
 #if debug
 std::cout << "Original message to be sent: " << data << std::endl;
 #endif
+
+    std::string dest = id_ip[dest_id];  //get ip of the node
 
     std::vector<std::string> path = get_path(dest);
 
@@ -622,16 +627,19 @@ std::cout << "Original message to be sent: " << data << std::endl;
     if (path.empty()) {
         //TODO: dovrebbero esserci funzioni per vedere se un
         //TODO: dato ip è un indirizzo di broadcast...
-        if (strcmp(dest, "255.255.255.255") != 0) {
-            std::cerr << "Error in searching the path, dest not found and not broadcast" << std::endl;
-            return false;
-        }
-        //send in broadcast
-#if debug
-std::cout << "Sending message in broadcast" << std::endl;
-#endif
-        path.emplace_back("broadcast");
-        j_vec = path;
+//        if (strcmp(dest, "255.255.255.255") != 0) {
+//            std::cerr << "Error in searching the path, dest not found and not broadcast" << std::endl;
+//            return false;
+//        }
+//        //send in broadcast
+//#if debug
+//std::cout << "Sending message in broadcast" << std::endl;
+//#endif
+//        path.emplace_back("broadcast");
+//        j_vec = path;
+//        broadcast = true;
+        std::cerr << "Error in searching the path, dest not found!" << std::endl;
+        return false;
     } else {
 #if debug
 std::cout << "Sending message in unicast" << std::endl;
@@ -643,7 +651,7 @@ std::cout << "Sending message in unicast" << std::endl;
     document["data"] = json::parse(data);
 
     client.sin_family = AF_INET;
-    client.sin_addr.s_addr = inet_addr(dest);
+    client.sin_addr.s_addr = inet_addr(dest.c_str());
     //inet_pton(AF_INET, dest, &(client.sin_addr.s_addr));
     client.sin_port = htons(PORT);
 
@@ -664,11 +672,14 @@ std::cout << "ip_to_ack: " << ip_to_ack << std::endl;
 #endif
 
     int _try = 0;
-    //TODO: per ora la send è singola, quindi aspetto un ack da un solo ip
     while (wait_for_ack && _try < 5) {
         sendto(socket_info, payload, strlen(payload),
                MSG_CONFIRM, (const struct sockaddr *) &client,
                cli_len);
+
+//        if (broadcast) {
+//            wait_for_ack = false;
+//        }
 
         sleep(3);    //the read thread will change stuff
 
@@ -682,23 +693,23 @@ std::cout << "ip_to_ack: " << ip_to_ack << std::endl;
 /// \param data message to be sent
 /// \param dest ID of the destination node
 /// \return true iff the message has been correctly sent and received
-bool WIMP::send(const char *data, int dest) {
-
-#if debug
-    std::cout << "\nCalled send (ID): data " << data << "\t dest: " << dest << std::endl;
-#endif
-
-    if (id_ip.find(dest) == id_ip.end()) {
-#if debug
-std::cerr << "Destination" << dest << " not found!" << std::endl;
-#endif
-        return false;
-    }
-
-    std::string ip = id_ip[dest];
-
-    return WIMP::send(data, ip.c_str());
-}
+//bool WIMP::send(const char *data, int dest) {
+//
+//#if debug
+//    std::cout << "\nCalled send (ID): data " << data << "\t dest: " << dest << std::endl;
+//#endif
+//
+//    if (id_ip.find(dest) == id_ip.end()) {
+//#if debug
+//std::cerr << "Destination" << dest << " not found!" << std::endl;
+//#endif
+//        return false;
+//    }
+//
+//    std::string ip = id_ip[dest];
+//
+//    return WIMP::send(data, ip.c_str());
+//}
 
 
 //TODO: POSSONO ESSERCI PROBLEMI DI MULTITHREADING CON CHILDREN!

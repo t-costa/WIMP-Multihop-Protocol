@@ -13,7 +13,7 @@ void sender() {
     std::vector<std::string> messages;
 
     std::string hello, ack, leave, change, forpar, forchi;
-    hello = R"({"handle":"hello","ip":"192.168.12.12","path":"77"})";
+    hello = R"({"handle":"hello","ip":"192.168.43.114","path":"77"})";
     ack = R"({"handle" : "ack","type" : "true"})";
     forpar = R"({"handle" : "forward_parent","data":{"type":"place","from":"DEVICE_ID","place":"7","status":"busy"}})";
     leave = R"({"handle" : "leave",	"ip_source" : "192.168.91.10"})";
@@ -32,16 +32,19 @@ void sender() {
     srand(time(NULL));
     bool t = true;
     while (t) {
-        sleep(5);
+        sleep(30);
         int i = rand() % 6;
         WIMP::show_routes();
         sleep(1);
         std::cout << "Sending message: " << messages[i] << std::endl;
 
-        WIMP::send(messages[i].c_str(), "255.255.255.255");
+        if (i%2 == 0) {
+            WIMP::send(messages[i].c_str(), "192.168.43.57");
+        } else {
+            WIMP::send(messages[i].c_str(), "255.255.255.255");
+        }
         t = (i != 7);
     }
-
 }
 
 int main() {
