@@ -2,11 +2,11 @@
 public class NodeInfo {
 
     private final String ip;
-    private final int id;
+    private final String id;
     private int not_seen;
     private int path_length;
 
-    public NodeInfo(String ip, int id, int path_length) {
+    public NodeInfo(String ip, String id, int path_length) {
         this.ip = ip;
         this.id = id;
         this.not_seen = 0;
@@ -17,7 +17,7 @@ public class NodeInfo {
         return ip;
     }
 
-    public int get_id() {
+    public String get_id() {
         return id;
     }
 

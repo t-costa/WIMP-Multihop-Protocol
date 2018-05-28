@@ -307,11 +307,11 @@ public class NetworkClass implements NetworkCommunication {
             case "hello":
                 //rispondi con hello_risp and update info
                 send_hello("hello_risp", jsonObject.getString("ip_source"));
-                getHelloInfo(jsonObject.getString("ip"), jsonObject.getInt("unique_id"), jsonObject.getInt("path"));
+                getHelloInfo(jsonObject.getString("ip"), jsonObject.getString("unique_id"), jsonObject.getInt("path"));
                 return 0;
 
             case "hello_risp":
-                getHelloInfo(jsonObject.getString("ip"), jsonObject.getInt("unique_id"), jsonObject.getInt("path"));
+                getHelloInfo(jsonObject.getString("ip"), jsonObject.getString("unique_id"), jsonObject.getInt("path"));
                 return 0;
 
             case "ack":
@@ -361,7 +361,7 @@ public class NetworkClass implements NetworkCommunication {
                 if (num_children < max_children) {
                     //aggiungi
                     //TODO: mi sa che in change non metto unique_id, controlla!
-                    NodeInfo n = new NodeInfo(child_change, jsonObject.getInt("unique_id"), this.path_length+1);
+                    NodeInfo n = new NodeInfo(child_change, jsonObject.getString("unique_id"), this.path_length+1);
                     children.add(n);
                     send_ack(true, child_change);
                     //informa sink
@@ -443,7 +443,7 @@ public class NetworkClass implements NetworkCommunication {
      * @param id Unique ID of the sender of the message
      * @param path Path length specified in the message
      */
-    private void getHelloInfo(String ip, int id, int path) {
+    private void getHelloInfo(String ip, String id, int path) {
 
         if (ip.equals(parent)) {
             this.path_length = path + 1;
@@ -530,7 +530,7 @@ public class NetworkClass implements NetworkCommunication {
      */
     private void send_hello(String type, String dest) {
         JSONObject message = new JSONObject();
-        message.put("unique_id", my_id);
+        message.put("unique_id", "" + my_id);
         message.put("ssid", "WIMP_SIM");
         message.put("path", path_length);
         message.put("ip", my_ip);
