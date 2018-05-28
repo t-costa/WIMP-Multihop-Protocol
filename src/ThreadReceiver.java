@@ -29,6 +29,10 @@ public class ThreadReceiver extends Thread {
                 System.err.println("C'è stato un errore nella read! chiudo tutto");
                 return;
             }
+
+            for (int i=0; i<buffer.length; ++i) {
+                buffer[i] = 0;
+            }
         }
     }
 }

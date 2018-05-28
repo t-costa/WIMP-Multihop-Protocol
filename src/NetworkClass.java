@@ -286,8 +286,8 @@ public class NetworkClass implements NetworkCommunication {
                     if (arr.getString(0).equals("broadcast")) {
                         //for everyone
                         System.out.println("TEST: Received a broadcast message!");
-                        String data = jsonObject.getString("data");
-                        System.arraycopy(data.getBytes(), 0, buffer, 0, data.length());
+                        JSONObject data = jsonObject.getJSONObject("data");
+                        System.arraycopy(data.toString().getBytes(), 0, buffer, 0, data.length());
 
                         for (int i=data.length(); i<buffer.length; ++i) {
                             buffer[i] = 0;

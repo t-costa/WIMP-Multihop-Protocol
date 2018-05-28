@@ -254,6 +254,7 @@ std::cout << "Received message: " << incoming_message << std::endl;
         doc = json::parse(incoming_message);
     } catch  (json::parse_error &e) {
         std::cerr << "Error in parsing json!" << std::endl;
+        memset(incoming_message, 0, sizeof(incoming_message));
         return -1;
     }
 
@@ -609,8 +610,12 @@ std::cout << "Original message to be sent: " << data << std::endl;
     document["path"] = j_vec;
     document["data"] = json::parse(data);
 
+    //int last = path.length();
+
+    std::string hop = path.front();
+
     client.sin_family = AF_INET;
-    client.sin_addr.s_addr = inet_addr(dest.c_str());
+    client.sin_addr.s_addr = inet_addr(hop.c_str());
     //inet_pton(AF_INET, dest, &(client.sin_addr.s_addr));
     client.sin_port = htons(PORT);
 

@@ -3,7 +3,7 @@ public class test {
 
     public static void main(String[] args) {
 
-        NetworkCommunication net = new NetworkClass(1, "192.168.43.114", 10);
+        NetworkCommunication net = new NetworkClass(1, "10.13.3.145", 100);
 
         while (!net.udpInitialize(42100)) {
             System.err.println("Inizializzazione fallita... Trying again in 10 seconds");
