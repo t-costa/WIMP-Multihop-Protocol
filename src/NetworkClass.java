@@ -271,17 +271,22 @@ public class NetworkClass implements NetworkCommunication {
                 if (arr.getString(0).equals(my_ip)) {
                     //i'm destination
                     String data = jsonObject.getString("data");
-                    buffer = data.getBytes();
+
+                    System.arraycopy(data.getBytes(), 0, buffer, 0, data.length());
+
                     for (int i=data.length(); i<buffer.length; ++i) {
                         buffer[i] = 0;
                     }
+
+                    send_ack(true, parent);
                     return data.length();
                 } else {
 
                     if (arr.getString(0).equals("broadcast")) {
                         //for everyone
                         String data = jsonObject.getString("data");
-                        buffer = data.getBytes();
+                        System.arraycopy(data.getBytes(), 0, buffer, 0, data.length());
+
                         for (int i=data.length(); i<buffer.length; ++i) {
                             buffer[i] = 0;
                         }
