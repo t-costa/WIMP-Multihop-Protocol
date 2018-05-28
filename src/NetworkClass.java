@@ -77,7 +77,6 @@ public class NetworkClass implements NetworkCommunication {
             byte[] data = new byte[512];
             try {
                 while (true) {
-                    System.out.println("Waiting messages...");
                     udpReceive(data);
                     if (udpSocket.isClosed())
                         return;
@@ -90,7 +89,7 @@ public class NetworkClass implements NetworkCommunication {
         initializer.start();
 
         try {
-            Thread.sleep(4000);
+            Thread.sleep(10000);
             udpSocket.close();  //kills initializer
             Thread.sleep(100);
         } catch (InterruptedException e) {
@@ -242,7 +241,7 @@ public class NetworkClass implements NetworkCommunication {
 
         if (sourcePacket.equals(my_ip) || sourcePacket.equals("127.0.0.1")) {
             //System.out.println("Ricevuto un messaggio da me stesso medesimo");
-            //System.out.println("Ricevuto: " + message);
+            System.out.println("Ricevuto: " + message);
             return 0;
         }
 
@@ -503,6 +502,11 @@ public class NetworkClass implements NetworkCommunication {
         if (parent != null) {
             int index = getIndexNeighbour(parent);
             neighbours.remove(index);
+            try {
+                Thread.sleep(15000);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
 
         neighbours.sort((n1, n2) -> {

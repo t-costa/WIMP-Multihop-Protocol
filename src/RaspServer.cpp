@@ -698,7 +698,7 @@ for (auto& c : children) {
         while (found) {
             auto i_remove = children.end();
             for (auto it = children.begin(); it != children.end(); it++) {
-                if ((*it).second > 5) {
+                if ((*it).second > 2) {
                     i_remove = it;
                 }
             }
