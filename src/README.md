@@ -1,4 +1,4 @@
-# Doc and TODO
+# Documentation
 
 ## Protocol functioning (new node enters the network)
 The ESP starts searching for WIMP nodes to connect to and for each found node, it connects to it and sends an hello to let the other node know its presence (and IP). Then it selects the "best" node (shortest path and stronger signal), reconnects to it and asks to become his child. If accepted, it enters in the normal functioning and the parent notifies the sink; otherwise, the node asks the second best node and so on.
