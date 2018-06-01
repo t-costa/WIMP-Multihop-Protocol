@@ -10,8 +10,11 @@
 #include <queue>
 #include <algorithm>
 
-#include <nlohmann/json.hpp>
 #include <thread>
+#include <mutex>
+#include <shared_mutex>
+
+#include <nlohmann/json.hpp>
 
 #include "RaspServer.h"
 
@@ -40,13 +43,13 @@ char my_ip[20];
 
 //data for incoming messages
 char incoming_message[LEN_PACKET];
-//std::queue<const char*> buffer;
 bool wait_for_ack = false;
 std::string ip_to_ack;
 
+std::mutex mutex_children, mutex_routes;
 
 /// Shows the current connections between nodes (parent-children)
-void WIMP::show_routes() {
+void show_routes() {
 
     std::cout << "Paths from Raspberry to any other node:" << std::endl;
 
@@ -55,7 +58,6 @@ void WIMP::show_routes() {
         std::vector<std::string> parents;
         
         auto p = c_p.second;
-        //parents.push_back(child);
         parents.push_back(p);
         bool error = false;
         while (!error && p != "Sink") {
@@ -63,7 +65,7 @@ void WIMP::show_routes() {
                 //there is something wrong with the path...
                 error = true;
             } else {
-                p = routes[p];  //is the child of someone
+                p = routes[p];          //is the child of someone
                 parents.push_back(p);   //add other step of the path
             }
         }
@@ -84,29 +86,31 @@ void WIMP::show_routes() {
 /// Changes a route new child for a known parent or a new parent for a known child
 /// \param parent parent of the new child
 /// \param child new child arrived, or child that is changing parents
-void WIMP::change_route(std::string const& parent, std::string const& child) {
+void change_route(std::string const& parent, std::string const& child) {
 
+    std::unique_lock<std::mutex> lock(mutex_routes);
     if (routes.find(child) == routes.end()) {
         //new child
         routes.emplace(child, parent);
 #if debug
-    std::cout << "Change of a unknown child:\n" <<
-    " child: " << child <<
-    "\n new parent: " << parent << std::endl;
+std::cout << "Change of a unknown child:\n" <<
+" child: " << child <<
+"\n new parent: " << parent << std::endl;
 #endif
     } else {
         //known child
-        auto old_parent = routes[child];    //forse non mi serve l'old parent
+        auto old_parent = routes[child];
         routes[child] = parent;
 #if debug
-    std::cout << "Change of a known child:\n" <<
-    " child: " << child <<
-    "\n old parent: " << old_parent <<
-    "\n new parent: " << parent << std::endl;
+std::cout << "Change of a known child:\n" <<
+" child: " << child <<
+"\n old parent: " << old_parent <<
+"\n new parent: " << parent << std::endl;
 #endif
     }
+    lock.unlock();
 #if debug
-WIMP::show_routes();
+show_routes();
 #endif
 }
 
@@ -114,24 +118,25 @@ WIMP::show_routes();
 /// Removes a not valid route in the network
 /// \param parent parent that has lost his child
 /// \param child child that is changing the parent
-void WIMP::remove_route(std::string const& parent, std::string const& child) {
+void remove_route(std::string const& parent, std::string const& child) {
 
     if (routes.find(child) == routes.end() || routes[child] != parent) {
 #if debug
 std::cout << "Nothing to do..." << std::endl;
-WIMP::show_routes();
+show_routes();
 #endif
         return; //ok, no info
     }
+    std::unique_lock<std::mutex> lock(mutex_routes);
     routes.erase(child);
+    lock.unlock();
 #if debug
 std::cout << "Removed child " << child << std::endl;
-WIMP::show_routes();
+show_routes();
 #endif
     //it is possible that now others node are not reachable...
     //I don't change the others, in this way when the network recovers
     //itself is easy to change stuff
-    //TODO: should inform cloud! (malfunctioning?)
 }
 
 
@@ -143,7 +148,6 @@ void send_direct(const char* dest, const char* data) {
     //send udp message through socket (it's a neighbour)
 
     client.sin_family = AF_INET;
-    //client.sin_addr.s_addr = inet_addr(dest);
     inet_pton(AF_INET, dest, &(client.sin_addr));
     client.sin_port = htons(PORT);
 
@@ -186,7 +190,7 @@ std::vector<std::string> get_path(std::string const& dest) {
 
 #if debug
 std::cout << "Resolving path for: " << dest << std::endl;
-WIMP::show_routes();
+show_routes();
 #endif
 
     if (routes.find(dest) == routes.end()) {
@@ -229,11 +233,12 @@ std::cout << "dest not found, returning empty" << std::endl;
 int WIMP::read(char* data) {
 
 #if debug
-    std::cout << "Waiting for new messages from WIMP nodes..." << std::endl;
+std::cout << "Waiting for new messages from WIMP nodes..." << std::endl;
 #endif
 
     ssize_t rec_len;
-    rec_len = recvfrom(socket_info, (char *) incoming_message, LEN_PACKET, MSG_WAITALL, (struct sockaddr *) &client, &cli_len);
+    rec_len = recvfrom(socket_info, (char *) incoming_message, LEN_PACKET,
+            MSG_WAITALL, (struct sockaddr *) &client, &cli_len);
 
     if(rec_len  < 0) {
 #if debug
@@ -274,10 +279,9 @@ std::cout << "Parsing a HELLO message" << std::endl;
         hello_doc["handle"] = "hello_risp";
         hello_doc["ip"] = my_ip;
         hello_doc["path"] = 0;
-        hello_doc["ssid"] = "WIMP_0";
+        //hello_doc["ssid"] = "WIMP_0";   //used with ESP8266
         hello_doc["unique_id"] = "0";
         const char* hello_risp = hello_doc.dump().c_str();
-        //const char* hello_risp = R"({"handle":"hello_risp","ip":"172.24.1.1","path":0,"ssid":"WIMP_0","unique_id":0})";
 
         if (doc.find("ip") == doc.end()) {
             std::cerr << "Error in parsing hello, dest=NULL" << std::endl;
@@ -299,6 +303,7 @@ std::cout << "Parsing a HELLO message" << std::endl;
         //update liveness children
         bool found = false;
         int i = 0;
+        std::unique_lock<std::mutex> lock(mutex_children);
         while (i < num_children && !found) {
             if (children[i].first == dest) {
                 children[i].second = 0;
@@ -307,6 +312,7 @@ std::cout << "Parsing a HELLO message" << std::endl;
                 ++i;
             }
         }
+        lock.unlock();
 
         send_direct(dest.c_str(), hello_risp);
         hello_doc.clear();
@@ -326,7 +332,6 @@ std::cout << "Parsing a HELLO_RISP message (discarded)" << std::endl;
 std::cout << "Parsing a CHANGE message" << std::endl;
 #endif
         //someone wants me as parent
-        //const Value& old = doc["ip_old_parent"];
         if (doc.find("ip_source") == doc.end()) {
             std::cerr << "Error in parsing change, source=NULL" << std::endl;
             return -1;
@@ -335,14 +340,13 @@ std::cout << "Parsing a CHANGE message" << std::endl;
         std::string source = doc["ip_source"].get<std::string>();
 
         if (get_child(source) != -1) {
-            //era già mio figlio, deve essergli successo qualcosa, povero cucciolo
-            //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
+            //it was already my child, something must have happened...
             json ack_doc;
             json json_vec = get_path(source);
             ack_doc["handle"] = "ack";
             ack_doc["ip_source"] = my_ip;
             ack_doc["type"] = false;
-            ack_doc["path"] = json_vec; //è direttamente mio vicino
+            ack_doc["path"] = json_vec;     //it's directly connected
             const char* ack = ack_doc.dump().c_str();
             send_direct(source.c_str(), ack);
             ack_doc.clear();
@@ -358,68 +362,34 @@ std::cout << "Received a change request, but I have too many children!" << std::
             json ack_doc;
             std::vector<std::string> path;
             path.emplace_back(source);
-            json json_vec = path;   // get_path(source); è direttamente collegato
+            json json_vec = path;       // directly connected
             ack_doc["handle"] = "ack";
             ack_doc["ip_source"] = my_ip;
             ack_doc["type"] = false;
-            ack_doc["path"] = json_vec; //è direttamente mio vicino
+            ack_doc["path"] = json_vec;
             const char* ack = ack_doc.dump().c_str();
-            //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"false"})";
+
             send_direct(source.c_str(), ack);
             return 0;
         }
 
-        WIMP::change_route("Sink", source);
+        change_route("Sink", source);
+        std::unique_lock<std::mutex> lock(mutex_children);
         children.emplace_back(source, 0);
         num_children++;
+        lock.unlock();
 
         json ack_doc;
         json json_vec = get_path(source);
         ack_doc["handle"] = "ack";
         ack_doc["ip_source"] = my_ip;
         ack_doc["type"] = true;
-        ack_doc["path"] = json_vec; //è direttamente mio vicino
+        ack_doc["path"] = json_vec;     //directly connected
         const char* ack = ack_doc.dump().c_str();
 
-        //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
         send_direct(source.c_str(), ack);
         get_path(source);
         return 0;
-    }
-
-    if (handle == "leave") {
-#if debug
-std::cout << "Parsing a LEAVE message" << std::endl;
-#endif
-        //someone wants to leave me (really??)
-        if (doc.find("ip_source") == doc.end()) {
-            std::cerr << "Error in parsing leave, source=NULL" << std::endl;
-            return -1;
-        }
-        std::string source = doc["ip_source"].get<std::string>();
-
-        routes.erase(source);
-        //remove child
-        auto i_remove = children.end();
-        for (auto it = children.begin(); it != children.end(); it++) {
-            if ((*it).first == source) {
-                i_remove = it;
-            }
-        }
-        if (i_remove != children.end()) {
-            children.erase(i_remove);
-            num_children--;
-        }
-
-        json ack_doc;
-        ack_doc["handle"] = "ack";
-        ack_doc["ip_source"] = my_ip;
-        ack_doc["type"] = true;
-        //const char* ack = R"({"handle":"ack","ip_source":"172.24.1.1","type":"true"})";
-        const char* ack = ack_doc.dump().c_str();
-
-        send_direct(source.c_str(), ack);
-        return 0;            
     }
 
     if (handle == "forward_children") {
@@ -452,7 +422,7 @@ std::cout << "Parsing a NETWORK_CHANGED message" << std::endl;
         std::string parent = doc["ip_parent"].get<std::string>();
 
         json ack_doc;
-        auto path = get_path(parent);   //potrebbe essere un nodo lontano
+        auto path = get_path(parent);   //it can be a distant node
         json json_vec = path;
         ack_doc["handle"] = "ack";
         ack_doc["ip_source"] = my_ip;
@@ -462,12 +432,12 @@ std::cout << "Parsing a NETWORK_CHANGED message" << std::endl;
 
 
         if (op == "new_child") {
-            WIMP::change_route(parent, child);
+            change_route(parent, child);
             send_direct(path[0].c_str(), ack);
             return 0;
         }
         if (op == "removed_child") {
-            WIMP::remove_route(parent, child);
+            remove_route(parent, child);
             send_direct(path[0].c_str(), ack);
             return 0;
         }
@@ -493,7 +463,7 @@ std::cout << "Parsing a FORWARD_PARENT message" << std::endl;
 
         //I am the destination, message for application
         json data_value = doc["data"];
-        //data = doc["data"].get<std::string>();
+
         const char* msg = data_value.dump().c_str();
         for (size_t i=0; i<strlen(msg); ++i) {
             data[i] = msg[i];
@@ -501,25 +471,21 @@ std::cout << "Parsing a FORWARD_PARENT message" << std::endl;
 #if debug
 std::cout << "Data for application: " << data << std::endl;
 #endif
-        //for application
-        //buffer.push(data);
+
         std::string source = doc["ip_source"].get<std::string>();
+
+        //building ack
         json ack_doc;
         ack_doc["handle"] = "ack";
         ack_doc["ip_source"] = my_ip;
         ack_doc["type"] = true;
         std::vector<std::string> path = get_path(source);
-        json j_vec = path; //get_path(source.c_str());
+        json j_vec = path;
         ack_doc["path"] = j_vec;
 
         const char* ack = ack_doc.dump().c_str();
 
-//        if (path.empty()) {
-//            send_direct(source.c_str(), ack);   //è direttamente collegato
-//        } else {
-//            send_direct(path[0], ack);
-//        }
-        send_direct(path[0].c_str(), ack);
+        send_direct(path[0].c_str(), ack);      //can be directly connected or not
 
         return (int) strlen(data);
     }
@@ -528,8 +494,6 @@ std::cout << "Data for application: " << data << std::endl;
 #if debug
 std::cout << "Parsing a ACK message" << std::endl;
 #endif
-
-        //bool type = doc["type"].get<bool>();
 
         if (doc.find("ip_source") == doc.end()) {
             std::cerr << "Error in parsing ack message, ip_source=NULL" << std::endl;
@@ -561,7 +525,7 @@ std::cout << " from " << source << std::endl;
 
     //this should be an error
 #if debug
-std::cerr << "qualquadra non cosa" << std::endl;
+std::cerr << "Something's wrong..." << std::endl;
 #endif
     return -1;
 }
@@ -574,8 +538,6 @@ std::cerr << "qualquadra non cosa" << std::endl;
 bool WIMP::send(const char* data, const char* dest_id) {
 
     //build json with forward_children and path
-    //document is the root of a json message
-    //bool broadcast = false;
     json document;
 
 #if debug
@@ -590,17 +552,6 @@ std::cout << "Original message to be sent: " << data << std::endl;
     json j_vec;
 
     if (path.empty()) {
-//        if (strcmp(dest, "255.255.255.255") != 0) {
-//            std::cerr << "Error in searching the path, dest not found and not broadcast" << std::endl;
-//            return false;
-//        }
-//        //send in broadcast
-//#if debug
-//std::cout << "Sending message in broadcast" << std::endl;
-//#endif
-//        path.emplace_back("broadcast");
-//        j_vec = path;
-//        broadcast = true;
         std::cerr << "Error in searching the path, dest not found!" << std::endl;
         return false;
     } else {
@@ -610,17 +561,13 @@ std::cout << "Original message to be sent: " << data << std::endl;
     document["path"] = j_vec;
     document["data"] = json::parse(data);
 
-    //int last = path.length();
-
     std::string hop = path.front();
 
     client.sin_family = AF_INET;
     client.sin_addr.s_addr = inet_addr(hop.c_str());
-    //inet_pton(AF_INET, dest, &(client.sin_addr.s_addr));
     client.sin_port = htons(PORT);
 
     const char* payload = document.dump().c_str();
-
 
 #if debug
 std::cout << "Message to be sent (json object): " << document << std::endl;
@@ -628,7 +575,7 @@ std::cout << "Message to be sent (actual message): " << payload << std::endl;
 #endif
 
     wait_for_ack = true;
-    ip_to_ack = dest;   //TODO: check
+    ip_to_ack = dest;
 
 #if debug
 std::cout << "dest: " << dest << std::endl;
@@ -641,11 +588,7 @@ std::cout << "ip_to_ack: " << ip_to_ack << std::endl;
                MSG_CONFIRM, (const struct sockaddr *) &client,
                cli_len);
 
-//        if (broadcast) {
-//            wait_for_ack = false;
-//        }
-
-        sleep(3);    //the read thread will change stuff
+        sleep(3);    //the read thread will change wait_for_ack
 
         _try++;
     }
@@ -653,30 +596,7 @@ std::cout << "ip_to_ack: " << ip_to_ack << std::endl;
     return !wait_for_ack;
 }
 
-/// Sends a nessage to the specific destination
-/// \param data message to be sent
-/// \param dest ID of the destination node
-/// \return true iff the message has been correctly sent and received
-//bool WIMP::send(const char *data, int dest) {
-//
-//#if debug
-//    std::cout << "\nCalled send (ID): data " << data << "\t dest: " << dest << std::endl;
-//#endif
-//
-//    if (id_ip.find(dest) == id_ip.end()) {
-//#if debug
-//std::cerr << "Destination" << dest << " not found!" << std::endl;
-//#endif
-//        return false;
-//    }
-//
-//    std::string ip = id_ip[dest];
-//
-//    return WIMP::send(data, ip.c_str());
-//}
 
-
-//TODO: POSSONO ESSERCI PROBLEMI DI MULTITHREADING CON CHILDREN!
 /// Endless loop that checks if my children are alive, if not, it removes them
 void check_alive() {
 
@@ -686,7 +606,7 @@ void check_alive() {
 #if debug
 std::cout << "Started check_alive, incrementing counter" << std::endl;
 #endif
-
+        std::unique_lock<std::mutex> lock(mutex_children);
         for (auto& c : children) {
             c.second++;
         }
@@ -696,9 +616,11 @@ for (auto& c : children) {
     std::cout << "ip: " << c.first << " \t counter: " << c.second << std::endl;
 }
 #endif
+        lock.unlock();
 
         sleep(5);
 
+        lock.lock();
         bool found = true;
         while (found) {
             auto i_remove = children.end();
@@ -711,23 +633,19 @@ for (auto& c : children) {
 #if debug
 std::cout << "removing " << (*i_remove).first << std::endl;
 #endif
+                std::unique_lock<std::mutex> lock1(mutex_routes);
                 routes.erase((*i_remove).first);    //remove route
+                mutex_routes.unlock();
                 children.erase(i_remove);
                 num_children--;
             } else {
-                found = false;  //esco se li ho trovati tutti
+                found = false;      //found all the dead children
             }
         }
+        lock.unlock();
+
 
         sleep(10);
-
-        //giusto per non avere la chiazza gialla del loop che non termina...
-        if (num_children > MAX_CHILDREN) {
-#if debug
-std::cout << "qualcosa di impossibile è appena successa..." << std::endl;
-#endif
-            break;
-        }
     }
 }
 

@@ -15,23 +15,23 @@ public class ThreadReceiver extends Thread {
             int n = net.udpReceive(buffer);
 
             if (n > 0) {
-                System.out.println("Ricevuto veri e propri dati per l'applicazione");
+                System.out.println("Received messages for application.");
                 String mex = new String(buffer);
                 mex = mex.substring(0, n);
-                System.out.println("Messaggio: " + mex);
+                System.out.println("Message: " + mex);
             }
 
             if (n == 0) {
-                System.out.println("Ricevuto un messaggio di gestione");
+                System.out.println("Received a management message.");
             }
 
             if (n < 0) {
-                System.err.println("C'è stato un errore nella read! chiudo tutto");
+                System.err.println("Error in read! Stop the thread.");
                 return;
             }
 
             for (int i=0; i<buffer.length; ++i) {
-                buffer[i] = 0;
+                buffer[i] = (byte) '\0';
             }
         }
     }
