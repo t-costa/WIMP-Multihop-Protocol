@@ -12,7 +12,6 @@
 
 #include <thread>
 #include <mutex>
-#include <shared_mutex>
 
 #include <nlohmann/json.hpp>
 
