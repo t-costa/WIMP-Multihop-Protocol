@@ -1,5 +1,10 @@
 # Documentation
 
+## Warnings
+The code in the ESP directory is not tested (and almost certainly not working) since we had an hardware problem with our ESP modules. The directory Emergency ESP contains a functioning java implementation of the protocol, with the difference that every node acts only as a station and not as station+AP.
+
+In every single file of this repository there might be an infinite number of bugs (features) and errors, some comments might be in Italian or simply nonsense, the code has been written in a rush for a university exam, so it might be so awful to look at that your eyes could bleed. Read and use these files at your own risk. Enjoy!
+
 ## Protocol functioning (new node enters the network)
 The ESP starts searching for WIMP nodes to connect to and for each found node, it connects to it and sends an hello to let the other node know its presence (and IP). Then it selects the "best" node (shortest path and stronger signal), reconnects to it and asks to become his child. If accepted, it enters in the normal functioning and the parent notifies the sink; otherwise, the node asks the second best node and so on.
 
@@ -25,13 +30,13 @@ received answer < - - - - - - - - - sends positive ack
 //enters in loop of read and management
 
 ## Protocol functioning (periodic messages)
-Every ESP node sends periodically an HELLO message and gathers the answers of the other node to update his knowledge of the network.
+Every ESP node sends periodically an HELLO message and gathers the answers of the other nodes to update his knowledge of the network.
 
 ## Protocol functioning (node leaves/dies)
-If a node becomes unreachable, sooner or later his children and parent will notice it, so the children will look for another parent (like if they were new nodes) and the old parent will notify the sink of the dead node.
+If a node becomes unreachable, sooner or later his children and parent will notice it, so the children will look for another parent (like if they were new nodes) and the old parent will notify the sink about the dead node.
 
 ## Type of messages
-The following is a list of all the possible messages that can be exchanged by the ESP nodes and the sink, some of the messages might not be used in the final project (such as leave), due to lack of time.
+The following is a list of all the possible messages that can be exchanged by the ESP nodes and the sink.
 
 ### HELLO/HELLO_RISP
 Sent every tot seconds in broadcast: let other nodes know me and my path length, and the answer let me know of other nodes. Used also to check if my parent (or children) is still alive, otherwise I have to change parent.
@@ -39,7 +44,7 @@ Sent every tot seconds in broadcast: let other nodes know me and my path length,
 {
   "handle" : "hello/hello_risp",
   "ip" : "my ip",
-  "path" : "length path of the source",
+  "path" : "length path to the source",
   "ssid" : "ssid of the AP",
   "unique_id" : "my id"
 }
@@ -60,7 +65,7 @@ Used to send a message from the sink to any other node in the network, specifyin
 {
   "handle" : "forward_children",
   "path" : ["ip1", "ip2", "ip3"],
-  "data" : /* generic json message */
+  "data" : /* generic message */
 }
 
 ### FORWARD_PARENT
@@ -69,7 +74,7 @@ Used to send data from a generic node to the sink; every intermediate node will 
 {
   "handle" : "forward_parent",
   "ip_source" : "ip",
-  "data" : /* generic json message */
+  "data" : /* generic message */
 }
 
 ### NETWORK_CHANGED
