@@ -1,4 +1,7 @@
 
+/**
+ * Interface for the communication protocol
+ */
 public interface NetworkCommunication {
 
     /**

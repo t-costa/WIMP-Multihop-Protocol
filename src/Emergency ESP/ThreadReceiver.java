@@ -1,3 +1,7 @@
+
+/**
+ * Just a test class for receiving messages
+ */
 public class ThreadReceiver extends Thread {
 
     private NetworkCommunication net;

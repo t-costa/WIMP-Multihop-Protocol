@@ -10,7 +10,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-
+/**
+ * Class that handles all the logic of the communication
+ * between nodes
+ */
 public class NetworkClass implements NetworkCommunication {
 
     private DatagramSocket udpSocket;
