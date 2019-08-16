@@ -3,7 +3,7 @@
 ## Warnings
 The code in the ESP directory is not tested (and almost certainly not working) since we had an hardware problem with our ESP modules. The directory Emergency ESP contains a functioning java implementation of the protocol, with the difference that every node acts only as a station and not as station+AP.
 
-In every single file of this repository there might be an infinite number of bugs (features) and errors, some comments might be in Italian or simply nonsense, the code has been written in a rush for a university exam, so it might be so awful to look at that your eyes could bleed. Read and use these files at your own risk. Enjoy!
+In every single file of this repository there might be an infinite number of bugs (features) and errors, some comments might be in Italian or simply nonsense. The code has been written in a rush for a university exam, so it might be so awful to look at that your eyes could bleed. Read and use these files at your own risk. Enjoy!
 
 ## Protocol functioning (new node enters the network)
 The ESP starts searching for WIMP nodes to connect to and for each found node, it connects to it and sends an hello to let the other node know its presence (and IP). Then it selects the "best" node (shortest path and stronger signal), reconnects to it and asks to become his child. If accepted, it enters in the normal functioning and the parent notifies the sink; otherwise, the node asks the second best node and so on.
